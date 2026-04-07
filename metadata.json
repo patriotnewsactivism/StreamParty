@@ -1,0 +1,5 @@
+{
+  "name": "StreamParty",
+  "description": "Host video watch parties with live chat and real-time emoji reactions.",
+  "requestFramePermissions": []
+}

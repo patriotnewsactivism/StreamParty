@@ -1,0 +1,71 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "A watch party room state.",
+      "type": "object",
+      "properties": {
+        "videoUrl": { "type": "string", "description": "The URL of the video being played." },
+        "status": { "type": "string", "enum": ["playing", "paused"], "description": "Current playback status." },
+        "currentTime": { "type": "number", "description": "Current playback time in seconds." },
+        "lastUpdated": { "type": "number", "description": "Timestamp of the last update." },
+        "hostId": { "type": "string", "description": "UID of the user who is currently controlling the video." }
+      },
+      "required": ["videoUrl", "status", "currentTime", "lastUpdated", "hostId"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message in a room.",
+      "type": "object",
+      "properties": {
+        "roomId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["roomId", "userId", "userName", "text", "timestamp"]
+    },
+    "Reaction": {
+      "title": "Reaction",
+      "description": "A live emoji reaction.",
+      "type": "object",
+      "properties": {
+        "roomId": { "type": "string" },
+        "userId": { "type": "string" },
+        "emoji": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["roomId", "userId", "emoji", "timestamp"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" }
+      },
+      "required": ["uid", "displayName"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "State of a specific watch party room."
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages within a room."
+    },
+    "/rooms/{roomId}/reactions/{reactionId}": {
+      "schema": "Reaction",
+      "description": "Live reactions within a room."
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile data."
+    }
+  }
+}
