@@ -44,6 +44,7 @@ import {
   Loader
 } from 'lucide-react';
 import { cn } from './lib/utils';
+import { getVkVideoMp4Url } from './lib/vk';
 
 // --- Types ---
 
