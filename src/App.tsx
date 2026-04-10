@@ -145,7 +145,7 @@ const REACTION_EMOJIS = [
   { icon: Angry, color: 'text-orange-500', label: '😡' },
 ];
 
-const BASE_URL = 'https://stream-party-cyan.vercel.app';
+const BASE_URL = 'https://donmatthews.live';
 
 // --- Helpers ---
 
