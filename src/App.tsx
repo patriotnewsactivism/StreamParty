@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   auth,
   db,
@@ -22,11 +22,9 @@ import {
   query,
   orderBy,
   limit,
-  serverTimestamp,
   getDocs,
   where,
   deleteDoc,
-  getDoc,
   User
 } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
@@ -63,7 +61,10 @@ import {
   X,
   Code,
   MessageCircle,
-  ChevronDown
+  CheckCircle,
+  UserPlus,
+  Tv,
+  PartyPopper
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { getVkVideoMp4Url } from './lib/vk';
@@ -119,6 +120,14 @@ interface WatchPartyEvent {
   creatorName: string;
   roomId: string;
   status: 'upcoming' | 'live' | 'ended';
+  rsvpCount?: number;
+}
+
+interface RSVP {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: number;
 }
 
 interface Subscriber {
@@ -162,11 +171,8 @@ function navigate(path: string) {
   window.location.hash = path;
 }
 
-function generateRoomId(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let id = '';
-  for (let i = 0; i < 8; i++) id += chars[Math.floor(Math.random() * chars.length)];
-  return id;
+function generateId(): string {
+  return Math.random().toString(36).slice(2, 10);
 }
 
 function generateEventId(): string {
@@ -174,15 +180,11 @@ function generateEventId(): string {
 }
 
 function formatDate(ts: number): string {
-  return new Date(ts).toLocaleDateString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-  });
+  return new Date(ts).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString('en-US', {
-    hour: 'numeric', minute: '2-digit', hour12: true
-  });
+  return new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
 function formatDateTime(ts: number): string {
@@ -205,8 +207,8 @@ function useCountdown(targetDate: number) {
   const [timeLeft, setTimeLeft] = useState(calculateTimeLeft(targetDate));
   useEffect(() => {
     setTimeLeft(calculateTimeLeft(targetDate));
-    const interval = setInterval(() => setTimeLeft(calculateTimeLeft(targetDate)), 1000);
-    return () => clearInterval(interval);
+    const iv = setInterval(() => setTimeLeft(calculateTimeLeft(targetDate)), 1000);
+    return () => clearInterval(iv);
   }, [targetDate]);
   return timeLeft;
 }
@@ -215,402 +217,352 @@ function useCountdown(targetDate: number) {
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
   const [route, setRoute] = useState<RouteInfo>(parseRoute());
-  const [showSubscribeModal, setShowSubscribeModal] = useState(false);
-  const [subscriberCount, setSubscriberCount] = useState(0);
 
-  // Auth
   useEffect(() => {
-    return onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-    });
+    return onAuthStateChanged(auth, (u) => { setUser(u); setAuthLoading(false); });
   }, []);
 
-  // Route sync
   useEffect(() => {
-    const onHashChange = () => setRoute(parseRoute());
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    const fn = () => setRoute(parseRoute());
+    window.addEventListener('hashchange', fn);
+    return () => window.removeEventListener('hashchange', fn);
   }, []);
 
-  // Subscriber count (global)
-  useEffect(() => {
-    const q = query(collection(db, 'subscribers'));
-    return onSnapshot(q, (snap) => setSubscriberCount(snap.size));
-  }, []);
+  // Public pages — no login required
+  if (route.page === 'home') return <HomePage user={user} authLoading={authLoading} />;
+  if (route.page === 'events') return <EventsPage user={user} authLoading={authLoading} />;
+  if (route.page === 'event-detail') return <EventDetailPage eventId={route.param} user={user} authLoading={authLoading} />;
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-neutral-950 flex items-center justify-center">
-        <div className="animate-pulse text-neutral-500 font-mono">INITIALIZING STREAM...</div>
-      </div>
-    );
+  // Auth-required pages
+  if (authLoading) {
+    return <div className="min-h-screen bg-neutral-950 flex items-center justify-center"><div className="animate-pulse text-neutral-500 font-mono">LOADING...</div></div>;
   }
 
-  if (!user) {
-    return <LoginPage />;
-  }
+  if (!user && route.page === 'create-event') return <AuthGate onDone={() => {}} message="Sign in to create a watch party" />;
+  if (!user && route.page === 'room') return <AuthGate onDone={() => {}} message="Sign in to join the watch party" />;
 
-  return (
-    <div className="min-h-screen bg-neutral-950 text-white flex flex-col">
-      {/* Only show navbar outside of room view */}
-      {route.page !== 'room' && (
-        <NavBar
-          user={user}
-          subscriberCount={subscriberCount}
-          onSubscribe={() => setShowSubscribeModal(true)}
-        />
-      )}
+  if (route.page === 'create-event' && user) return <CreateEventPage user={user} />;
+  if (route.page === 'room' && user) return <RoomView user={user} roomId={route.param} />;
 
-      {/* Page Router */}
-      {route.page === 'home' && <HomePage user={user} />}
-      {route.page === 'events' && <EventsPage user={user} />}
-      {route.page === 'create-event' && <CreateEventPage user={user} />}
-      {route.page === 'event-detail' && (
-        <EventDetailPage
-          eventId={route.param}
-          user={user}
-          onSubscribe={() => setShowSubscribeModal(true)}
-        />
-      )}
-      {route.page === 'room' && <RoomView user={user} roomId={route.param} />}
-
-      {/* Global Subscribe Modal */}
-      <AnimatePresence>
-        {showSubscribeModal && (
-          <SubscribeModal onClose={() => setShowSubscribeModal(false)} />
-        )}
-      </AnimatePresence>
-    </div>
-  );
+  return <HomePage user={user} authLoading={authLoading} />;
 }
 
-// --- NavBar ---
+// --- Public NavBar ---
 
-function NavBar({ user, subscriberCount, onSubscribe }: {
-  user: User;
-  subscriberCount: number;
-  onSubscribe: () => void;
-}) {
+function PublicNav({ user, transparent }: { user: User | null; transparent?: boolean }) {
   return (
-    <nav className="border-b border-neutral-800 bg-neutral-950/80 backdrop-blur-md sticky top-0 z-40">
+    <nav className={cn("sticky top-0 z-40 border-b", transparent ? "bg-transparent border-transparent" : "bg-neutral-950/80 backdrop-blur-md border-neutral-800")}>
       <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-6">
-          <button onClick={() => navigate('home')} className="flex items-center gap-2 group">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center group-hover:bg-indigo-500 transition-colors">
-              <Video size={16} />
+          <button onClick={() => navigate('home')} className="flex items-center gap-2.5 group">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+              <Video size={16} className="text-white" />
             </div>
-            <span className="font-bold text-sm hidden sm:block">StreamParty</span>
+            <span className="font-bold hidden sm:block">StreamParty</span>
           </button>
-
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => navigate('events')}
-              className="px-3 py-1.5 text-sm text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition-colors"
-            >
-              <span className="flex items-center gap-1.5"><Calendar size={14} /> Events</span>
-            </button>
-            <button
-              onClick={() => navigate('create-event')}
-              className="px-3 py-1.5 text-sm text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition-colors"
-            >
-              <span className="flex items-center gap-1.5"><Plus size={14} /> Create</span>
-            </button>
+            <button onClick={() => navigate('events')} className="px-3 py-1.5 text-sm text-neutral-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors">Events</button>
+            <button onClick={() => navigate('create-event')} className="px-3 py-1.5 text-sm text-neutral-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors flex items-center gap-1"><Plus size={14} /> Create</button>
           </div>
         </div>
-
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onSubscribe}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/30 transition-colors"
-          >
-            <Bell size={12} />
-            <span className="hidden sm:inline">Subscribe</span>
-            {subscriberCount > 0 && (
-              <span className="bg-indigo-600 text-white text-[10px] px-1.5 py-0.5 rounded-full">{subscriberCount}</span>
-            )}
-          </button>
-
-          <div className="flex items-center gap-2 text-xs text-neutral-500">
-            <div className="w-6 h-6 rounded-full bg-neutral-800 flex items-center justify-center text-[10px] font-bold">
-              {(user.displayName || 'A').charAt(0).toUpperCase()}
-            </div>
-            <span className="hidden sm:block max-w-[80px] truncate">{user.displayName || 'Guest'}</span>
-          </div>
-
-          <button
-            onClick={() => auth.signOut()}
-            className="p-1.5 text-neutral-500 hover:text-white transition-colors"
-            title="Logout"
-          >
-            <LogOut size={16} />
-          </button>
+        <div className="flex items-center gap-2">
+          {user ? (
+            <>
+              <span className="text-xs text-neutral-500 hidden sm:block">{user.displayName || 'Guest'}</span>
+              <button onClick={() => auth.signOut()} className="p-1.5 text-neutral-500 hover:text-white transition-colors" title="Logout"><LogOut size={16} /></button>
+            </>
+          ) : (
+            <button onClick={() => navigate('create-event')} className="px-3 py-1.5 text-xs font-medium bg-white/10 hover:bg-white/15 rounded-lg transition-colors">Sign In</button>
+          )}
         </div>
       </div>
     </nav>
   );
 }
 
-// --- Login Page ---
+// --- Auth Gate (for protected pages) ---
 
-function LoginPage() {
-  const [signInLoading, setSignInLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function AuthGate({ onDone, message }: { onDone: () => void; message: string }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
 
-  const handleLogin = async () => {
-    try {
-      setError(null);
-      setSignInLoading(true);
-      await signInWithPopup(auth, googleProvider);
-    } catch (error) {
-      if (error instanceof Error && 'code' in error) {
-        const authError = error as { code: string };
-        switch (authError.code) {
-          case 'auth/popup-blocked': setError('Popup blocked. Allow popups and try again.'); break;
-          case 'auth/popup-closed-by-user': setError('Popup closed before completing.'); break;
-          case 'auth/unauthorized-domain': setError('Domain not authorized. Use Guest login.'); break;
-          default: setError('Google sign-in failed. Try Guest login.');
-        }
-      } else {
-        setError('Unexpected error. Try Guest login.');
-      }
-    } finally {
-      setSignInLoading(false);
-    }
+  const google = async () => {
+    setLoading(true); setError('');
+    try { await signInWithPopup(auth, googleProvider); }
+    catch (e: any) { setError(e?.code === 'auth/unauthorized-domain' ? 'Use Guest login on this domain.' : 'Google sign-in failed. Try Guest.'); }
+    finally { setLoading(false); }
   };
 
-  const handleEmailAuth = async () => {
-    if (!email || !password) { setError('Enter both email and password.'); return; }
+  const emailAuth = async () => {
+    if (!email || !password) { setError('Enter email and password.'); return; }
+    setLoading(true); setError('');
     try {
-      setError(null);
-      setSignInLoading(true);
-      if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email, password);
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
-    } catch (error) {
-      if (error instanceof Error && 'code' in error) {
-        const authError = error as { code: string };
-        switch (authError.code) {
-          case 'auth/invalid-email': setError('Invalid email.'); break;
-          case 'auth/user-not-found': setError('No account with this email.'); break;
-          case 'auth/wrong-password': setError('Wrong password.'); break;
-          case 'auth/email-already-in-use': setError('Email already in use.'); break;
-          case 'auth/weak-password': setError('Password must be 6+ characters.'); break;
-          case 'auth/invalid-credential': setError(isSignUp ? 'Failed. Try Guest login.' : 'Invalid credentials. Try signing up.'); break;
-          default: setError('Auth failed. Try Guest login.');
-        }
-      } else {
-        setError('Unexpected error. Try Guest login.');
-      }
-    } finally {
-      setSignInLoading(false);
-    }
+      if (mode === 'signup') await createUserWithEmailAndPassword(auth, email, password);
+      else await signInWithEmailAndPassword(auth, email, password);
+    } catch (e: any) {
+      const c = e?.code || '';
+      if (c === 'auth/invalid-credential') setError('Invalid credentials. Try signing up.');
+      else if (c === 'auth/email-already-in-use') setError('Email already in use.');
+      else if (c === 'auth/weak-password') setError('Password must be 6+ chars.');
+      else setError('Auth failed. Try Guest.');
+    } finally { setLoading(false); }
   };
 
-  const handlePasswordReset = async () => {
-    if (!email) { setError('Enter your email.'); return; }
-    try {
-      setError(null);
-      await sendPasswordResetEmail(auth, email);
-      setError('Reset email sent. Check your inbox.');
-    } catch { setError('Failed to send reset email.'); }
-  };
-
-  const handleAnonymousSignIn = async () => {
-    try {
-      setError(null);
-      setSignInLoading(true);
-      await signInAnonymously(auth);
-    } catch { setError('Failed to sign in. Try again.'); }
-    finally { setSignInLoading(false); }
+  const guest = async () => {
+    setLoading(true); setError('');
+    try { await signInAnonymously(auth); }
+    catch { setError('Failed. Try again.'); }
+    finally { setLoading(false); }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-neutral-950 via-neutral-900 to-neutral-950 flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
-      <div className="absolute inset-0">
-        {[...Array(20)].map((_, i) => (
-          <motion.div
-            key={i}
-            className="absolute w-1 h-1 bg-indigo-500/20 rounded-full"
-            animate={{ scale: [0, 1, 0], opacity: [0, 0.5, 0] }}
-            transition={{ duration: 3, delay: Math.random() * 2, repeat: Infinity, repeatDelay: Math.random() * 3 }}
-            style={{ left: `${Math.random() * 100}%`, top: `${Math.random() * 100}%` }}
-          />
-        ))}
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 30, scale: 0.9 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.6 }}
-        className="max-w-md w-full space-y-6 relative z-10"
-      >
-        <div className="space-y-4">
-          <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.2, type: "spring" }}
-            className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-indigo-600 to-purple-600 text-white mb-4 shadow-2xl shadow-indigo-500/25">
-            <Video size={36} />
-          </motion.div>
-          <h1 className="text-5xl font-bold tracking-tight bg-gradient-to-r from-white to-neutral-300 bg-clip-text text-transparent">StreamParty</h1>
-          <p className="text-neutral-400 text-lg">Watch videos together in real-time.</p>
-          <p className="text-neutral-600 text-xs tracking-wider uppercase">by Don Matthews</p>
-        </div>
-
-        {error && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="bg-red-600/20 border border-red-500/30 text-red-400 text-sm p-3 rounded-lg">
-            {error}
-          </motion.div>
-        )}
-
-        <button onClick={handleLogin} disabled={signInLoading}
-          className="w-full py-4 px-6 bg-gradient-to-r from-white to-neutral-200 text-black font-semibold rounded-xl hover:shadow-xl hover:shadow-white/20 transition-all flex items-center justify-center gap-3 disabled:opacity-70">
-          {signInLoading ? <><Loader className="w-5 h-5 animate-spin" /> Signing in...</>
-            : <><img src="/google.svg" className="w-5 h-5" alt="Google" /> Sign in with Google </>}
-        </button>
-
-        <div className="flex items-center w-full">
-          <div className="flex-1 h-px bg-neutral-700" />
-          <span className="px-4 text-neutral-500 text-sm">or</span>
-          <div className="flex-1 h-px bg-neutral-700" />
-        </div>
-
-        <form onSubmit={(e) => { e.preventDefault(); handleEmailAuth(); }} className="space-y-3">
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email"
-            className="w-full px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-          <div className="space-y-1">
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password"
-              className="w-full px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-            {!isSignUp && (
-              <div className="text-right">
-                <button type="button" onClick={handlePasswordReset} className="text-xs text-indigo-400 hover:text-indigo-300">Forgot password?</button>
-              </div>
-            )}
+    <div className="min-h-screen bg-neutral-950 text-white">
+      <PublicNav user={null} />
+      <div className="flex items-center justify-center p-6 pt-16">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-sm w-full space-y-5">
+          <div className="text-center space-y-2">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center mx-auto mb-4"><Video size={28} /></div>
+            <h2 className="text-xl font-bold">{message}</h2>
           </div>
-          <button type="submit" disabled={signInLoading}
-            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-70">
-            {signInLoading ? 'Processing...' : (isSignUp ? 'Sign Up' : 'Sign In')}
+
+          {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-3 rounded-lg">{error}</div>}
+
+          <button onClick={google} disabled={loading} className="w-full py-3 bg-white text-black font-semibold rounded-xl flex items-center justify-center gap-3 hover:bg-neutral-100 transition-colors disabled:opacity-60">
+            {loading ? <Loader className="w-5 h-5 animate-spin" /> : <><img src="/google.svg" className="w-5 h-5" alt="" /> Sign in with Google</>}
           </button>
-        </form>
 
-        <div className="text-sm text-neutral-400">
-          {isSignUp ? 'Have an account?' : "No account?"}{' '}
-          <button onClick={() => setIsSignUp(!isSignUp)} className="text-indigo-400 hover:text-indigo-300 underline">
-            {isSignUp ? 'Sign In' : 'Sign Up'}
+          <div className="flex items-center"><div className="flex-1 h-px bg-neutral-800" /><span className="px-3 text-xs text-neutral-600">or</span><div className="flex-1 h-px bg-neutral-800" /></div>
+
+          <form onSubmit={(e) => { e.preventDefault(); emailAuth(); }} className="space-y-3">
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" className="w-full px-4 py-2.5 bg-neutral-900 border border-neutral-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" className="w-full px-4 py-2.5 bg-neutral-900 border border-neutral-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
+            <button type="submit" disabled={loading} className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-medium text-sm transition-colors disabled:opacity-60">
+              {mode === 'signup' ? 'Sign Up' : 'Sign In'}
+            </button>
+          </form>
+          <div className="text-center text-xs text-neutral-500">
+            {mode === 'signup' ? 'Have an account?' : 'No account?'}{' '}
+            <button onClick={() => setMode(mode === 'signup' ? 'signin' : 'signup')} className="text-indigo-400 underline">{mode === 'signup' ? 'Sign In' : 'Sign Up'}</button>
+          </div>
+
+          <div className="flex items-center"><div className="flex-1 h-px bg-neutral-800" /><span className="px-3 text-xs text-neutral-600">or</span><div className="flex-1 h-px bg-neutral-800" /></div>
+
+          <button onClick={guest} disabled={loading} className="w-full py-2.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg font-medium text-sm transition-colors disabled:opacity-60 flex items-center justify-center gap-2">
+            <Users size={16} /> Continue as Guest
           </button>
-        </div>
-
-        <div className="flex items-center w-full">
-          <div className="flex-1 h-px bg-neutral-700" />
-          <span className="px-4 text-neutral-500 text-sm">or</span>
-          <div className="flex-1 h-px bg-neutral-700" />
-        </div>
-
-        <button onClick={handleAnonymousSignIn} disabled={signInLoading}
-          className="w-full py-3 bg-neutral-700 hover:bg-neutral-600 text-white font-semibold rounded-lg transition-colors disabled:opacity-70 flex items-center justify-center gap-3">
-          {signInLoading ? <><Loader className="w-5 h-5 animate-spin" /> Signing in...</>
-            : <><Users size={20} /> Continue as Guest</>}
-        </button>
-
-        <p className="text-xs text-neutral-600">Join viewers watching together</p>
-      </motion.div>
+        </motion.div>
+      </div>
     </div>
   );
 }
 
+// =============================================
+// PUBLIC PAGES - No login required
+// =============================================
+
 // --- Home Page ---
 
-function HomePage({ user }: { user: User }) {
+function HomePage({ user, authLoading }: { user: User | null; authLoading: boolean }) {
   const [events, setEvents] = useState<WatchPartyEvent[]>([]);
-  const [loadingEvents, setLoadingEvents] = useState(true);
+  const [subscriberCount, setSubscriberCount] = useState(0);
+  const [subEmail, setSubEmail] = useState('');
+  const [subName, setSubName] = useState('');
+  const [subStatus, setSubStatus] = useState<'' | 'loading' | 'done' | 'error'>('');
 
   useEffect(() => {
     const q = query(collection(db, 'events'), orderBy('scheduledAt', 'asc'));
     return onSnapshot(q, (snap) => {
       const now = Date.now();
-      const evts = snap.docs.map(d => ({ id: d.id, ...d.data() } as WatchPartyEvent))
-        .filter(e => e.scheduledAt > now - 3600000); // show events from last hour onwards
-      setEvents(evts);
-      setLoadingEvents(false);
+      setEvents(snap.docs.map(d => ({ id: d.id, ...d.data() } as WatchPartyEvent)).filter(e => e.scheduledAt > now - 7200000));
     });
   }, []);
 
+  useEffect(() => {
+    return onSnapshot(query(collection(db, 'subscribers')), (snap) => setSubscriberCount(snap.size));
+  }, []);
+
+  const handleSubscribe = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!subEmail.includes('@')) return;
+    setSubStatus('loading');
+    try {
+      const existing = await getDocs(query(collection(db, 'subscribers'), where('email', '==', subEmail.trim().toLowerCase())));
+      if (existing.empty) {
+        await addDoc(collection(db, 'subscribers'), { email: subEmail.trim().toLowerCase(), name: subName.trim(), subscribedAt: Date.now(), source: 'homepage' });
+      }
+      setSubStatus('done');
+      setSubEmail(''); setSubName('');
+    } catch { setSubStatus('error'); }
+  };
+
+  const liveEvents = events.filter(e => e.scheduledAt <= Date.now());
+  const upcomingEvents = events.filter(e => e.scheduledAt > Date.now());
+
   return (
-    <div className="flex-1">
-      {/* Hero Section */}
+    <div className="min-h-screen bg-neutral-950 text-white">
+      <PublicNav user={user} />
+
+      {/* Hero */}
       <div className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-b from-indigo-600/10 to-transparent" />
-        <div className="max-w-6xl mx-auto px-4 py-16 relative z-10">
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center space-y-6">
-            <h1 className="text-4xl sm:text-6xl font-bold tracking-tight">
+        <div className="absolute inset-0">
+          <div className="absolute inset-0 bg-gradient-to-b from-indigo-600/15 via-purple-600/10 to-transparent" />
+          {[...Array(15)].map((_, i) => (
+            <motion.div key={i} className="absolute w-1 h-1 bg-indigo-400/30 rounded-full"
+              animate={{ scale: [0, 1, 0], opacity: [0, 0.6, 0] }}
+              transition={{ duration: 4, delay: i * 0.3, repeat: Infinity }}
+              style={{ left: `${5 + Math.random() * 90}%`, top: `${10 + Math.random() * 80}%` }} />
+          ))}
+        </div>
+
+        <div className="max-w-5xl mx-auto px-4 py-20 sm:py-28 relative z-10 text-center">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-medium mb-6">
+              <Tv size={14} /> Watch Parties by Don Matthews
+            </div>
+            <h1 className="text-4xl sm:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1] mb-6">
               Watch Together.<br />
-              <span className="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">React Together.</span>
+              <span className="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Experience Together.</span>
             </h1>
-            <p className="text-neutral-400 text-lg max-w-xl mx-auto">
-              Create watch parties, schedule events, and bring your audience together for synchronized video experiences.
+            <p className="text-neutral-400 text-lg sm:text-xl max-w-2xl mx-auto mb-10">
+              Join live watch parties with synchronized video, real-time chat, and reactions. Subscribe to never miss an event.
             </p>
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-              <button onClick={() => { const id = generateRoomId(); navigate(id); }}
-                className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold transition-colors flex items-center gap-2">
-                <Play size={18} /> Start a Room
-              </button>
-              <button onClick={() => navigate('create-event')}
-                className="px-6 py-3 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-xl font-semibold transition-colors flex items-center gap-2">
-                <Calendar size={18} /> Schedule Watch Party
+
+            {/* CTA Buttons */}
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-12">
+              {liveEvents.length > 0 ? (
+                <button onClick={() => navigate(liveEvents[0].roomId)}
+                  className="px-8 py-4 bg-red-600 hover:bg-red-500 rounded-xl font-bold text-lg transition-all shadow-lg shadow-red-600/30 hover:shadow-red-500/40 flex items-center gap-3 animate-pulse">
+                  <span className="w-3 h-3 rounded-full bg-white animate-ping" />
+                  Join Live Now — {liveEvents[0].title}
+                </button>
+              ) : upcomingEvents.length > 0 ? (
+                <button onClick={() => navigate(`event/${upcomingEvents[0].id}`)}
+                  className="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold text-lg transition-all shadow-lg shadow-indigo-600/30 hover:shadow-indigo-500/40 flex items-center gap-3">
+                  <Calendar size={20} /> Next Event — {upcomingEvents[0].title}
+                </button>
+              ) : (
+                <button onClick={() => navigate('create-event')}
+                  className="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold text-lg transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-3">
+                  <Plus size={20} /> Create a Watch Party
+                </button>
+              )}
+              <button onClick={() => navigate('events')}
+                className="px-6 py-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl font-medium transition-colors flex items-center gap-2">
+                Browse Events <ChevronRight size={16} />
               </button>
             </div>
           </motion.div>
         </div>
       </div>
 
+      {/* Subscribe Section — Prominent, above the fold */}
+      <div className="bg-gradient-to-r from-indigo-600/10 via-purple-600/10 to-indigo-600/10 border-y border-indigo-500/10">
+        <div className="max-w-3xl mx-auto px-4 py-10">
+          <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
+            className="text-center space-y-4">
+            <div className="flex items-center justify-center gap-3">
+              <Bell size={24} className="text-indigo-400" />
+              <h2 className="text-2xl font-bold">Never Miss a Watch Party</h2>
+            </div>
+            <p className="text-neutral-400">Get notified when new events are scheduled. No spam, ever.</p>
+
+            {subStatus === 'done' ? (
+              <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }}
+                className="flex items-center justify-center gap-2 text-green-400 font-semibold py-3">
+                <CheckCircle size={20} /> You're subscribed! We'll keep you posted.
+              </motion.div>
+            ) : (
+              <form onSubmit={handleSubscribe} className="flex flex-col sm:flex-row items-stretch gap-2 max-w-lg mx-auto">
+                <input type="text" value={subName} onChange={e => setSubName(e.target.value)}
+                  placeholder="Your name" className="px-4 py-3 bg-neutral-900 border border-neutral-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500 sm:w-36" />
+                <input type="email" value={subEmail} onChange={e => setSubEmail(e.target.value)}
+                  placeholder="Email address" required
+                  className="flex-1 px-4 py-3 bg-neutral-900 border border-neutral-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
+                <button type="submit" disabled={subStatus === 'loading'}
+                  className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold text-sm transition-colors disabled:opacity-60 flex items-center justify-center gap-2 whitespace-nowrap">
+                  {subStatus === 'loading' ? <Loader className="w-4 h-4 animate-spin" /> : <><Mail size={16} /> Subscribe</>}
+                </button>
+              </form>
+            )}
+
+            {subscriberCount > 0 && (
+              <p className="text-xs text-neutral-500 flex items-center justify-center gap-1">
+                <Users size={12} /> {subscriberCount} {subscriberCount === 1 ? 'subscriber' : 'subscribers'} already signed up
+              </p>
+            )}
+          </motion.div>
+        </div>
+      </div>
+
+      {/* Live Now Banner */}
+      {liveEvents.length > 0 && (
+        <div className="bg-red-600/10 border-b border-red-500/20">
+          <div className="max-w-6xl mx-auto px-4 py-6">
+            {liveEvents.map(evt => (
+              <button key={evt.id} onClick={() => navigate(evt.roomId)}
+                className="w-full flex items-center justify-between gap-4 p-4 rounded-xl bg-red-600/10 border border-red-500/20 hover:bg-red-600/20 transition-colors group">
+                <div className="flex items-center gap-4">
+                  <div className="relative">
+                    <span className="w-4 h-4 rounded-full bg-red-500 block animate-pulse" />
+                    <span className="absolute inset-0 w-4 h-4 rounded-full bg-red-500 animate-ping opacity-50" />
+                  </div>
+                  <div className="text-left">
+                    <div className="text-xs text-red-400 font-semibold uppercase tracking-wider mb-0.5">🔴 Live Now</div>
+                    <div className="font-bold text-lg">{evt.title}</div>
+                  </div>
+                </div>
+                <div className="px-5 py-2.5 bg-red-600 group-hover:bg-red-500 rounded-lg font-bold transition-colors flex items-center gap-2">
+                  <Play size={16} /> Join Now
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Upcoming Events */}
-      <div className="max-w-6xl mx-auto px-4 py-12">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold flex items-center gap-2"><Calendar size={20} /> Upcoming Watch Parties</h2>
-          <button onClick={() => navigate('events')} className="text-sm text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
-            View All <ChevronRight size={14} />
-          </button>
+      <div className="max-w-6xl mx-auto px-4 py-14">
+        <div className="flex items-center justify-between mb-8">
+          <h2 className="text-2xl font-bold flex items-center gap-3"><Calendar size={24} className="text-indigo-400" /> Upcoming Watch Parties</h2>
+          <button onClick={() => navigate('events')} className="text-sm text-indigo-400 hover:text-indigo-300 flex items-center gap-1">View All <ChevronRight size={14} /></button>
         </div>
 
-        {loadingEvents ? (
-          <div className="text-center py-12 text-neutral-500">Loading events...</div>
-        ) : events.length === 0 ? (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="text-center py-16 space-y-4">
-            <Calendar size={48} className="mx-auto text-neutral-700" />
-            <p className="text-neutral-500">No upcoming watch parties yet.</p>
+        {upcomingEvents.length === 0 && liveEvents.length === 0 ? (
+          <div className="text-center py-16 space-y-4">
+            <div className="w-20 h-20 rounded-2xl bg-neutral-900 flex items-center justify-center mx-auto"><Calendar size={32} className="text-neutral-700" /></div>
+            <p className="text-neutral-500 text-lg">No upcoming events yet.</p>
             <button onClick={() => navigate('create-event')}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors">
-              Create the First One
-            </button>
-          </motion.div>
+              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-semibold transition-colors">Create the First One</button>
+          </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {events.slice(0, 6).map((evt, i) => (
-              <EventCard key={evt.id} event={evt} index={i} />
-            ))}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {upcomingEvents.slice(0, 6).map((evt, i) => <EventCard key={evt.id} event={evt} index={i} />)}
           </div>
         )}
       </div>
 
-      {/* Quick Room Entry */}
-      <div className="max-w-6xl mx-auto px-4 py-12 border-t border-neutral-800">
-        <div className="text-center space-y-4">
-          <h3 className="text-lg font-semibold">Or jump into a room right now</h3>
+      {/* Quick Join */}
+      <div className="border-t border-neutral-800">
+        <div className="max-w-3xl mx-auto px-4 py-14 text-center space-y-5">
+          <h3 className="text-xl font-bold">Have a Room Code?</h3>
+          <p className="text-neutral-500 text-sm">Enter a code to join an existing watch party room.</p>
           <QuickRoomEntry />
         </div>
       </div>
 
       {/* Footer */}
       <footer className="border-t border-neutral-800 py-8">
-        <div className="max-w-6xl mx-auto px-4 text-center text-xs text-neutral-600">
-          StreamParty by Don Matthews · Watch videos together in real-time
+        <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-neutral-600">
+          <span>StreamParty by Don Matthews</span>
+          <div className="flex items-center gap-4">
+            <button onClick={() => navigate('events')} className="hover:text-neutral-400 transition-colors">Events</button>
+            <button onClick={() => navigate('create-event')} className="hover:text-neutral-400 transition-colors">Create Event</button>
+          </div>
         </div>
       </footer>
     </div>
@@ -618,15 +570,12 @@ function HomePage({ user }: { user: User }) {
 }
 
 function QuickRoomEntry() {
-  const [roomCode, setRoomCode] = useState('');
+  const [code, setCode] = useState('');
   return (
-    <form onSubmit={(e) => { e.preventDefault(); navigate(roomCode || generateRoomId()); }} className="flex items-center gap-2 max-w-sm mx-auto">
-      <input type="text" value={roomCode} onChange={(e) => setRoomCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-        placeholder="Enter room code or leave blank"
-        className="flex-1 px-4 py-2.5 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
-      <button type="submit" className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors whitespace-nowrap">
-        Join Room
-      </button>
+    <form onSubmit={e => { e.preventDefault(); navigate(code || generateId()); }} className="flex items-center gap-2 max-w-md mx-auto">
+      <input type="text" value={code} onChange={e => setCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+        placeholder="Room code (or leave blank for new)" className="flex-1 px-4 py-3 bg-neutral-900 border border-neutral-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
+      <button type="submit" className="px-5 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap">Join</button>
     </form>
   );
 }
@@ -636,54 +585,68 @@ function QuickRoomEntry() {
 function EventCard({ event, index }: { key?: React.Key; event: WatchPartyEvent; index: number }) {
   const countdown = useCountdown(event.scheduledAt);
   const isLive = countdown.isLive;
+  const [rsvpCount, setRsvpCount] = useState(0);
+
+  useEffect(() => {
+    return onSnapshot(query(collection(db, 'events', event.id, 'rsvps')), snap => setRsvpCount(snap.size));
+  }, [event.id]);
 
   return (
     <motion.button
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.1 }}
-      whileHover={{ scale: 1.02, y: -2 }}
-      onClick={() => navigate(`event/${event.id}`)}
-      className="text-left p-5 rounded-xl border border-neutral-800 bg-neutral-900 hover:border-neutral-700 transition-all group relative overflow-hidden"
-    >
-      <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+      initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.08 }}
+      whileHover={{ y: -4 }}
+      onClick={() => navigate(isLive ? event.roomId : `event/${event.id}`)}
+      className={cn("text-left rounded-2xl border transition-all group relative overflow-hidden w-full",
+        isLive ? "bg-red-600/5 border-red-500/20 hover:border-red-500/40" : "bg-neutral-900/50 border-neutral-800 hover:border-neutral-700"
+      )}>
+      {/* Top accent bar */}
+      <div className={cn("h-1 w-full", isLive ? "bg-gradient-to-r from-red-600 to-orange-500" : "bg-gradient-to-r from-indigo-600 to-purple-600")} />
 
-      <div className="relative z-10 space-y-3">
+      <div className="p-5 space-y-3">
+        {/* Badge */}
         {isLive ? (
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-red-500/20 border border-red-500/30 text-red-400 text-[10px] font-semibold uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> Live Now
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/20 text-red-400 text-xs font-bold uppercase tracking-wider">
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /> Live Now
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 text-[10px] font-semibold uppercase tracking-wider">
-            <Clock size={10} /> Upcoming
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-400 text-xs font-medium">
+            <Clock size={11} /> {formatDate(event.scheduledAt)} · {formatTime(event.scheduledAt)}
           </span>
         )}
 
-        <h3 className="font-bold text-sm leading-tight line-clamp-2">{event.title}</h3>
+        <h3 className="font-bold text-lg leading-tight">{event.title}</h3>
+        {event.description && <p className="text-sm text-neutral-500 line-clamp-2">{event.description}</p>}
 
-        {event.description && (
-          <p className="text-xs text-neutral-500 line-clamp-2">{event.description}</p>
-        )}
-
-        <div className="flex items-center gap-2 text-[10px] text-neutral-500">
-          <Calendar size={10} />
-          {formatDate(event.scheduledAt)}
-          <span className="text-neutral-700">•</span>
-          <Clock size={10} />
-          {formatTime(event.scheduledAt)}
-        </div>
-
+        {/* Countdown */}
         {!isLive && (
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-neutral-400">Starts in:</span>
-            <span className="font-mono text-indigo-400">
-              {countdown.days > 0 && `${countdown.days}d `}
-              {countdown.hours}h {countdown.minutes}m {countdown.seconds}s
-            </span>
+          <div className="flex items-center gap-3 py-2">
+            {[
+              { v: countdown.days, l: 'd' },
+              { v: countdown.hours, l: 'h' },
+              { v: countdown.minutes, l: 'm' },
+              { v: countdown.seconds, l: 's' },
+            ].map(u => (
+              <div key={u.l} className="flex items-baseline gap-0.5">
+                <span className="text-xl font-bold font-mono text-white">{String(u.v).padStart(2, '0')}</span>
+                <span className="text-[10px] text-neutral-600 uppercase">{u.l}</span>
+              </div>
+            ))}
           </div>
         )}
 
-        <div className="text-[10px] text-neutral-600">by {event.creatorName}</div>
+        {/* Social proof row */}
+        <div className="flex items-center gap-3 text-xs text-neutral-500 pt-1">
+          {rsvpCount > 0 && (
+            <span className="flex items-center gap-1"><UserPlus size={12} className="text-indigo-400" /> {rsvpCount} going</span>
+          )}
+          <span className="flex items-center gap-1">by {event.creatorName}</span>
+        </div>
+
+        {/* Action hint */}
+        <div className={cn("mt-2 text-xs font-semibold flex items-center gap-1.5 transition-colors",
+          isLive ? "text-red-400 group-hover:text-red-300" : "text-indigo-400 group-hover:text-indigo-300")}>
+          {isLive ? <><Play size={12} /> Join the watch party</> : <><Eye size={12} /> View event & RSVP</>}
+        </div>
       </div>
     </motion.button>
   );
@@ -691,17 +654,14 @@ function EventCard({ event, index }: { key?: React.Key; event: WatchPartyEvent; 
 
 // --- Events Page ---
 
-function EventsPage({ user }: { user: User }) {
+function EventsPage({ user, authLoading }: { user: User | null; authLoading: boolean }) {
   const [events, setEvents] = useState<WatchPartyEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'upcoming' | 'past'>('upcoming');
+  const [filter, setFilter] = useState<'upcoming' | 'past' | 'all'>('upcoming');
 
   useEffect(() => {
     const q = query(collection(db, 'events'), orderBy('scheduledAt', 'asc'));
-    return onSnapshot(q, (snap) => {
-      setEvents(snap.docs.map(d => ({ id: d.id, ...d.data() } as WatchPartyEvent)));
-      setLoading(false);
-    });
+    return onSnapshot(q, snap => { setEvents(snap.docs.map(d => ({ id: d.id, ...d.data() } as WatchPartyEvent))); setLoading(false); });
   }, []);
 
   const now = Date.now();
@@ -712,276 +672,334 @@ function EventsPage({ user }: { user: User }) {
   });
 
   return (
-    <div className="flex-1 max-w-6xl mx-auto px-4 py-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-2xl font-bold">Watch Parties</h1>
-          <p className="text-sm text-neutral-500">Browse and join scheduled events</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center bg-neutral-800 rounded-lg p-0.5">
-            {(['upcoming', 'past', 'all'] as const).map(f => (
-              <button key={f} onClick={() => setFilter(f)}
-                className={cn("px-3 py-1.5 text-xs font-medium rounded-md transition-colors capitalize",
-                  filter === f ? "bg-neutral-700 text-white" : "text-neutral-500 hover:text-white")}>
-                {f}
-              </button>
-            ))}
+    <div className="min-h-screen bg-neutral-950 text-white">
+      <PublicNav user={user} />
+      <div className="max-w-6xl mx-auto px-4 py-10">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+          <div>
+            <h1 className="text-3xl font-bold">Watch Parties</h1>
+            <p className="text-neutral-500 mt-1">Browse events and join the fun — no account needed to look around.</p>
           </div>
-          <button onClick={() => navigate('create-event')}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5">
-            <Plus size={14} /> New Event
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex bg-neutral-900 rounded-xl p-0.5">
+              {(['upcoming', 'past', 'all'] as const).map(f => (
+                <button key={f} onClick={() => setFilter(f)}
+                  className={cn("px-4 py-2 text-xs font-medium rounded-lg transition-colors capitalize",
+                    filter === f ? "bg-indigo-600 text-white" : "text-neutral-500 hover:text-white")}>
+                  {f}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => navigate('create-event')}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-medium transition-colors flex items-center gap-1.5"><Plus size={14} /> New</button>
+          </div>
         </div>
-      </div>
 
-      {loading ? (
-        <div className="text-center py-16 text-neutral-500"><Loader className="w-6 h-6 animate-spin mx-auto" /></div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center py-16 space-y-4">
-          <Calendar size={48} className="mx-auto text-neutral-700" />
-          <p className="text-neutral-500">{filter === 'upcoming' ? 'No upcoming events.' : 'No events found.'}</p>
-          <button onClick={() => navigate('create-event')}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors">
-            Create One
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((evt, i) => <EventCard key={evt.id} event={evt} index={i} />)}
-        </div>
-      )}
+        {loading ? (
+          <div className="text-center py-20"><Loader className="w-8 h-8 animate-spin mx-auto text-neutral-600" /></div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-20 space-y-4">
+            <Calendar size={48} className="mx-auto text-neutral-700" />
+            <p className="text-neutral-500">{filter === 'upcoming' ? 'No upcoming events.' : 'Nothing here.'}</p>
+            <button onClick={() => navigate('create-event')} className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-semibold transition-colors">Create One</button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {filtered.map((evt, i) => <EventCard key={evt.id} event={evt} index={i} />)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-// --- Event Detail Page ---
+// --- Event Detail Page (Public) ---
 
-function EventDetailPage({ eventId, user, onSubscribe }: {
-  eventId: string;
-  user: User;
-  onSubscribe: () => void;
-}) {
+function EventDetailPage({ eventId, user, authLoading }: { eventId: string; user: User | null; authLoading: boolean }) {
   const [event, setEvent] = useState<WatchPartyEvent | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showEmbed, setShowEmbed] = useState(false);
+  const [rsvps, setRsvps] = useState<RSVP[]>([]);
+  const [rsvpEmail, setRsvpEmail] = useState('');
+  const [rsvpName, setRsvpName] = useState('');
+  const [rsvpStatus, setRsvpStatus] = useState<'' | 'loading' | 'done' | 'error'>('');
   const [copied, setCopied] = useState('');
+  const [showEmbed, setShowEmbed] = useState(false);
   const [viewerCount, setViewerCount] = useState(0);
 
   useEffect(() => {
-    const ref = doc(db, 'events', eventId);
-    return onSnapshot(ref, (snap) => {
-      if (snap.exists()) {
-        setEvent({ id: snap.id, ...snap.data() } as WatchPartyEvent);
-      }
+    return onSnapshot(doc(db, 'events', eventId), snap => {
+      if (snap.exists()) setEvent({ id: snap.id, ...snap.data() } as WatchPartyEvent);
       setLoading(false);
     });
   }, [eventId]);
 
-  // Track viewer count via room presence
+  useEffect(() => {
+    return onSnapshot(query(collection(db, 'events', eventId, 'rsvps'), orderBy('createdAt', 'desc')), snap => {
+      setRsvps(snap.docs.map(d => ({ id: d.id, ...d.data() } as RSVP)));
+    });
+  }, [eventId]);
+
   useEffect(() => {
     if (!event?.roomId) return;
-    const q = query(collection(db, 'rooms', event.roomId, 'presence'));
-    return onSnapshot(q, (snap) => {
-      const now = Date.now();
-      const online = snap.docs.filter(d => now - (d.data().lastSeen || 0) < 60000);
-      setViewerCount(online.length);
+    return onSnapshot(query(collection(db, 'rooms', event.roomId, 'presence')), snap => {
+      setViewerCount(snap.docs.filter(d => Date.now() - (d.data().lastSeen || 0) < 60000).length);
     });
   }, [event?.roomId]);
 
-  const countdown = useCountdown(event?.scheduledAt || Date.now() + 999999999);
+  const countdown = useCountdown(event?.scheduledAt || Date.now() + 9e9);
   const isLive = event ? event.scheduledAt <= Date.now() : false;
-
-  const copyLink = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(label);
-    setTimeout(() => setCopied(''), 2000);
-  };
 
   const eventUrl = `${BASE_URL}/#event/${eventId}`;
   const roomUrl = event ? `${BASE_URL}/#${event.roomId}` : '';
 
-  const shareOnTwitter = () => {
-    const text = event ? `Join me for "${event.title}" on StreamParty! ${eventUrl}` : '';
-    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
+  const copy = (text: string, label: string) => { navigator.clipboard.writeText(text); setCopied(label); setTimeout(() => setCopied(''), 2000); };
+
+  const handleRsvp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rsvpEmail.includes('@')) return;
+    setRsvpStatus('loading');
+    try {
+      const existing = await getDocs(query(collection(db, 'events', eventId, 'rsvps'), where('email', '==', rsvpEmail.trim().toLowerCase())));
+      if (existing.empty) {
+        await addDoc(collection(db, 'events', eventId, 'rsvps'), { email: rsvpEmail.trim().toLowerCase(), name: rsvpName.trim(), createdAt: Date.now() });
+      }
+      // Also add to global subscribers
+      const existingSub = await getDocs(query(collection(db, 'subscribers'), where('email', '==', rsvpEmail.trim().toLowerCase())));
+      if (existingSub.empty) {
+        await addDoc(collection(db, 'subscribers'), { email: rsvpEmail.trim().toLowerCase(), name: rsvpName.trim(), subscribedAt: Date.now(), source: `event-${eventId}` });
+      }
+      setRsvpStatus('done'); setRsvpEmail(''); setRsvpName('');
+    } catch { setRsvpStatus('error'); }
   };
 
-  const shareOnFacebook = () => {
-    window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(eventUrl)}`, '_blank');
-  };
+  if (loading) return <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center"><Loader className="w-8 h-8 animate-spin text-neutral-600" /></div>;
+  if (!event) return (
+    <div className="min-h-screen bg-neutral-950 text-white"><PublicNav user={user} />
+      <div className="flex items-center justify-center py-20"><p className="text-neutral-500">Event not found.</p></div>
+    </div>
+  );
 
-  if (loading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <Loader className="w-8 h-8 animate-spin text-neutral-500" />
-      </div>
-    );
-  }
-
-  if (!event) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <p className="text-neutral-500">Event not found.</p>
-          <button onClick={() => navigate('events')} className="text-indigo-400 hover:text-indigo-300 text-sm">← Back to Events</button>
-        </div>
-      </div>
-    );
-  }
-
-  const isCreator = event.createdBy === user.uid;
+  const isCreator = user && event.createdBy === user.uid;
 
   return (
-    <div className="flex-1 max-w-4xl mx-auto px-4 py-8">
-      <button onClick={() => navigate('events')}
-        className="flex items-center gap-1 text-sm text-neutral-500 hover:text-white mb-6 transition-colors">
-        <ArrowLeft size={14} /> Back to Events
-      </button>
+    <div className="min-h-screen bg-neutral-950 text-white">
+      <PublicNav user={user} />
 
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
-        {/* Event Header */}
-        <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            {isLive ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-500/20 border border-red-500/30 text-red-400 text-xs font-semibold uppercase tracking-wider">
-                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /> Live Now
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 text-xs font-semibold uppercase tracking-wider">
-                <Clock size={12} /> Upcoming
-              </span>
-            )}
-            {viewerCount > 0 && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-800 text-neutral-400 text-xs">
-                <Eye size={12} /> {viewerCount} watching
-              </span>
-            )}
-          </div>
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <button onClick={() => navigate('events')} className="flex items-center gap-1 text-sm text-neutral-500 hover:text-white mb-8 transition-colors">
+          <ArrowLeft size={14} /> All Events
+        </button>
 
-          <h1 className="text-3xl sm:text-4xl font-bold">{event.title}</h1>
-          {event.description && <p className="text-neutral-400 text-lg leading-relaxed">{event.description}</p>}
-
-          <div className="flex flex-wrap items-center gap-4 text-sm text-neutral-500">
-            <span className="flex items-center gap-1.5"><Calendar size={14} /> {formatDateTime(event.scheduledAt)}</span>
-            <span className="flex items-center gap-1.5"><Users size={14} /> by {event.creatorName}</span>
-          </div>
-        </div>
-
-        {/* Countdown Timer */}
-        {!isLive && (
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.2 }}
-            className="p-8 rounded-2xl bg-gradient-to-br from-indigo-600/10 to-purple-600/10 border border-indigo-500/20">
-            <p className="text-sm text-neutral-400 mb-4 text-center uppercase tracking-wider">Starts In</p>
-            <div className="flex items-center justify-center gap-4 sm:gap-8">
-              {[
-                { label: 'Days', value: countdown.days },
-                { label: 'Hours', value: countdown.hours },
-                { label: 'Minutes', value: countdown.minutes },
-                { label: 'Seconds', value: countdown.seconds },
-              ].map((unit) => (
-                <div key={unit.label} className="text-center">
-                  <div className="text-3xl sm:text-5xl font-bold font-mono text-white">
-                    {String(unit.value).padStart(2, '0')}
-                  </div>
-                  <div className="text-[10px] text-neutral-500 uppercase tracking-wider mt-1">{unit.label}</div>
-                </div>
-              ))}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
+          {/* Header */}
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              {isLive ? (
+                <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-red-500/20 border border-red-500/30 text-red-400 text-sm font-bold uppercase tracking-wider">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" /> Live Now
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-500/15 border border-indigo-500/25 text-indigo-400 text-sm font-semibold">
+                  <Clock size={14} /> {formatDateTime(event.scheduledAt)}
+                </span>
+              )}
+              {viewerCount > 0 && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-800 text-neutral-300 text-sm">
+                  <Eye size={14} className="text-green-400" /> {viewerCount} watching now
+                </span>
+              )}
+              {rsvps.length > 0 && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-800 text-neutral-300 text-sm">
+                  <UserPlus size={14} className="text-indigo-400" /> {rsvps.length} going
+                </span>
+              )}
             </div>
-          </motion.div>
-        )}
 
-        {/* Actions */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          {isLive ? (
-            <button onClick={() => navigate(event.roomId)}
-              className="flex-1 py-3.5 px-6 bg-red-600 hover:bg-red-500 rounded-xl font-semibold transition-colors flex items-center justify-center gap-2 text-lg">
-              <Play size={20} /> Join Watch Party
-            </button>
-          ) : (
-            <button onClick={() => navigate(event.roomId)}
-              className="flex-1 py-3.5 px-6 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold transition-colors flex items-center justify-center gap-2">
-              <Play size={18} /> Enter Room Early
-            </button>
-          )}
-          <button onClick={onSubscribe}
-            className="py-3.5 px-6 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-xl font-medium transition-colors flex items-center justify-center gap-2">
-            <Bell size={18} /> Subscribe for Updates
-          </button>
-        </div>
-
-        {/* Social Sharing */}
-        <div className="p-6 rounded-xl bg-neutral-900 border border-neutral-800 space-y-4">
-          <h3 className="font-semibold text-sm flex items-center gap-2"><Share2 size={16} /> Share This Event</h3>
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={shareOnTwitter}
-              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-sm transition-colors flex items-center gap-2">
-              <Globe size={14} /> Twitter
-            </button>
-            <button onClick={shareOnFacebook}
-              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-sm transition-colors flex items-center gap-2">
-              <Globe size={14} /> Facebook
-            </button>
-            <button onClick={() => copyLink(eventUrl, 'event')}
-              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-sm transition-colors flex items-center gap-2">
-              <Copy size={14} /> {copied === 'event' ? 'Copied!' : 'Copy Event Link'}
-            </button>
-            <button onClick={() => copyLink(roomUrl, 'room')}
-              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-sm transition-colors flex items-center gap-2">
-              <Link size={14} /> {copied === 'room' ? 'Copied!' : 'Copy Room Link'}
-            </button>
-            <button onClick={() => setShowEmbed(!showEmbed)}
-              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-sm transition-colors flex items-center gap-2">
-              <Code size={14} /> Embed
-            </button>
+            <h1 className="text-3xl sm:text-5xl font-bold leading-tight">{event.title}</h1>
+            {event.description && <p className="text-neutral-400 text-lg leading-relaxed">{event.description}</p>}
+            <p className="text-sm text-neutral-600">Hosted by {event.creatorName}</p>
           </div>
 
-          {/* Embed Code */}
-          <AnimatePresence>
-            {showEmbed && (
-              <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-                className="overflow-hidden">
-                <div className="mt-2 space-y-3">
-                  <p className="text-xs text-neutral-500">Paste this code on any website to embed this event:</p>
-                  <div className="relative">
-                    <pre className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-400 overflow-x-auto">
-{`<iframe src="${BASE_URL}/#${event.roomId}"
+          {/* Countdown or Live CTA */}
+          {isLive ? (
+            <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }}
+              className="p-8 rounded-2xl bg-gradient-to-br from-red-600/15 to-orange-600/10 border border-red-500/20 text-center space-y-5">
+              <div className="flex items-center justify-center gap-3">
+                <span className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-2xl font-bold text-red-400">This Event is Live!</span>
+              </div>
+              <p className="text-neutral-300">The watch party is happening right now. Jump in.</p>
+              <button onClick={() => navigate(event.roomId)}
+                className="px-10 py-4 bg-red-600 hover:bg-red-500 rounded-xl font-bold text-xl transition-all shadow-lg shadow-red-600/30 hover:shadow-red-500/40 flex items-center justify-center gap-3 mx-auto">
+                <Play size={22} /> Join the Watch Party
+              </button>
+            </motion.div>
+          ) : (
+            <div className="p-8 rounded-2xl bg-gradient-to-br from-indigo-600/10 to-purple-600/10 border border-indigo-500/15 space-y-5">
+              <p className="text-sm text-neutral-400 text-center uppercase tracking-wider font-medium">Starts In</p>
+              <div className="flex items-center justify-center gap-4 sm:gap-8">
+                {[
+                  { label: 'Days', value: countdown.days },
+                  { label: 'Hours', value: countdown.hours },
+                  { label: 'Minutes', value: countdown.minutes },
+                  { label: 'Seconds', value: countdown.seconds },
+                ].map(u => (
+                  <div key={u.label} className="text-center">
+                    <div className="text-4xl sm:text-6xl font-bold font-mono bg-gradient-to-b from-white to-neutral-400 bg-clip-text text-transparent">
+                      {String(u.value).padStart(2, '0')}
+                    </div>
+                    <div className="text-[10px] sm:text-xs text-neutral-500 uppercase tracking-wider mt-1">{u.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="text-center">
+                <button onClick={() => navigate(event.roomId)}
+                  className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold transition-colors flex items-center gap-2 mx-auto">
+                  <Play size={18} /> Enter Room Early
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======== SHARE BUTTONS — Big & Prominent ======== */}
+          <div className="p-6 rounded-2xl bg-neutral-900/80 border border-neutral-800 space-y-5">
+            <h3 className="text-lg font-bold flex items-center gap-2"><Share2 size={20} className="text-indigo-400" /> Share This Event</h3>
+            <p className="text-sm text-neutral-500">Help spread the word — the more the merrier!</p>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <button onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Join me for "${event.title}" on StreamParty!\n${eventUrl}`)}`, '_blank')}
+                className="flex items-center justify-center gap-2 py-3 px-4 bg-[#1DA1F2]/10 hover:bg-[#1DA1F2]/20 border border-[#1DA1F2]/20 rounded-xl text-[#1DA1F2] font-medium text-sm transition-colors">
+                <Globe size={18} /> Twitter
+              </button>
+              <button onClick={() => window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(eventUrl)}`, '_blank')}
+                className="flex items-center justify-center gap-2 py-3 px-4 bg-[#4267B2]/10 hover:bg-[#4267B2]/20 border border-[#4267B2]/20 rounded-xl text-[#4267B2] font-medium text-sm transition-colors">
+                <Globe size={18} /> Facebook
+              </button>
+              <button onClick={() => copy(eventUrl, 'link')}
+                className="flex items-center justify-center gap-2 py-3 px-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white font-medium text-sm transition-colors">
+                <Copy size={18} /> {copied === 'link' ? '✓ Copied!' : 'Copy Link'}
+              </button>
+              <button onClick={() => setShowEmbed(!showEmbed)}
+                className="flex items-center justify-center gap-2 py-3 px-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white font-medium text-sm transition-colors">
+                <Code size={18} /> Embed
+              </button>
+            </div>
+
+            {/* Direct Share URLs */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 p-3 bg-neutral-950 rounded-lg border border-neutral-800">
+                <span className="text-xs text-neutral-500 whitespace-nowrap">Event:</span>
+                <span className="text-xs text-neutral-300 truncate flex-1 font-mono">{eventUrl}</span>
+                <button onClick={() => copy(eventUrl, 'event-url')} className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap">{copied === 'event-url' ? '✓' : 'Copy'}</button>
+              </div>
+              <div className="flex items-center gap-2 p-3 bg-neutral-950 rounded-lg border border-neutral-800">
+                <span className="text-xs text-neutral-500 whitespace-nowrap">Room:</span>
+                <span className="text-xs text-neutral-300 truncate flex-1 font-mono">{roomUrl}</span>
+                <button onClick={() => copy(roomUrl, 'room-url')} className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap">{copied === 'room-url' ? '✓' : 'Copy'}</button>
+              </div>
+            </div>
+
+            {/* Embed Code */}
+            <AnimatePresence>
+              {showEmbed && (
+                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                  <div className="space-y-2 pt-2">
+                    <p className="text-xs text-neutral-500">Paste on any website to embed:</p>
+                    <div className="relative">
+                      <pre className="p-4 bg-neutral-950 border border-neutral-800 rounded-xl text-xs text-green-400 overflow-x-auto font-mono">
+{`<iframe
+  src="${BASE_URL}/#${event.roomId}"
   width="100%" height="500"
   frameborder="0"
   allow="autoplay; fullscreen"
-  style="border-radius: 12px; border: 1px solid #333;">
+  style="border-radius:12px;border:1px solid #333">
 </iframe>`}
-                    </pre>
-                    <button onClick={() => {
-                      navigator.clipboard.writeText(`<iframe src="${BASE_URL}/#${event.roomId}" width="100%" height="500" frameborder="0" allow="autoplay; fullscreen" style="border-radius: 12px; border: 1px solid #333;"></iframe>`);
-                      setCopied('embed');
-                      setTimeout(() => setCopied(''), 2000);
-                    }}
-                      className="absolute top-2 right-2 px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-[10px] transition-colors">
-                      {copied === 'embed' ? '✓ Copied' : 'Copy'}
-                    </button>
+                      </pre>
+                      <button onClick={() => { copy(`<iframe src="${BASE_URL}/#${event.roomId}" width="100%" height="500" frameborder="0" allow="autoplay; fullscreen" style="border-radius:12px;border:1px solid #333"></iframe>`, 'embed'); }}
+                        className="absolute top-3 right-3 px-3 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-xs transition-colors">{copied === 'embed' ? '✓ Copied!' : 'Copy Code'}</button>
+                    </div>
                   </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* ======== RSVP — Sign up in advance ======== */}
+          <div className="p-6 rounded-2xl bg-gradient-to-br from-indigo-600/5 to-purple-600/5 border border-indigo-500/10 space-y-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold flex items-center gap-2"><UserPlus size={20} className="text-indigo-400" /> RSVP — I'll Be There</h3>
+              {rsvps.length > 0 && <span className="text-sm text-indigo-400 font-semibold">{rsvps.length} going</span>}
+            </div>
+
+            {rsvpStatus === 'done' ? (
+              <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-xl">
+                <CheckCircle size={24} className="text-green-400 flex-shrink-0" />
+                <div>
+                  <p className="font-semibold text-green-400">You're on the list!</p>
+                  <p className="text-sm text-neutral-400">We'll remind you when the party starts.</p>
                 </div>
               </motion.div>
+            ) : (
+              <form onSubmit={handleRsvp} className="space-y-3">
+                <p className="text-sm text-neutral-400">Reserve your spot and get a reminder. No account needed.</p>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input type="text" value={rsvpName} onChange={e => setRsvpName(e.target.value)} placeholder="Your name"
+                    className="px-4 py-3 bg-neutral-900 border border-neutral-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500 sm:w-40" />
+                  <input type="email" value={rsvpEmail} onChange={e => setRsvpEmail(e.target.value)} placeholder="Email address" required
+                    className="flex-1 px-4 py-3 bg-neutral-900 border border-neutral-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
+                  <button type="submit" disabled={rsvpStatus === 'loading'}
+                    className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold text-sm transition-colors disabled:opacity-60 flex items-center justify-center gap-2 whitespace-nowrap">
+                    {rsvpStatus === 'loading' ? <Loader className="w-4 h-4 animate-spin" /> : <><CheckCircle size={16} /> RSVP</>}
+                  </button>
+                </div>
+                {rsvpStatus === 'error' && <p className="text-sm text-red-400">Something went wrong. Try again.</p>}
+              </form>
             )}
-          </AnimatePresence>
-        </div>
 
-        {/* Delete (creator only) */}
-        {isCreator && (
-          <div className="pt-4 border-t border-neutral-800">
-            <button onClick={async () => {
-              if (confirm('Delete this event?')) {
-                await deleteDoc(doc(db, 'events', eventId));
-                navigate('events');
-              }
-            }}
-              className="text-sm text-red-500 hover:text-red-400 flex items-center gap-1.5 transition-colors">
-              <Trash2 size={14} /> Delete Event
-            </button>
+            {/* RSVP names as social proof */}
+            {rsvps.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 pt-2">
+                {rsvps.slice(0, 12).map(r => (
+                  <span key={r.id} className="px-2.5 py-1 bg-neutral-800 rounded-full text-xs text-neutral-300">
+                    {r.name || r.email.split('@')[0]}
+                  </span>
+                ))}
+                {rsvps.length > 12 && <span className="text-xs text-neutral-500">+{rsvps.length - 12} more</span>}
+              </div>
+            )}
           </div>
-        )}
-      </motion.div>
+
+          {/* Admin controls */}
+          {isCreator && (
+            <div className="pt-4 border-t border-neutral-800 flex items-center gap-4">
+              <button onClick={async () => { if (confirm('Delete this event?')) { await deleteDoc(doc(db, 'events', eventId)); navigate('events'); } }}
+                className="text-sm text-red-500 hover:text-red-400 flex items-center gap-1.5 transition-colors"><Trash2 size={14} /> Delete Event</button>
+              <ExportSubscribers eventId={eventId} rsvps={rsvps} />
+            </div>
+          )}
+        </motion.div>
+      </div>
     </div>
+  );
+}
+
+// --- Export Subscribers ---
+
+function ExportSubscribers({ eventId, rsvps }: { eventId: string; rsvps: RSVP[] }) {
+  const exportCSV = () => {
+    const rows = [['Name', 'Email', 'RSVP Date']];
+    rsvps.forEach(r => rows.push([r.name, r.email, new Date(r.createdAt).toISOString()]));
+    const csv = rows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `rsvps-${eventId}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <button onClick={exportCSV} className="text-sm text-neutral-500 hover:text-neutral-300 flex items-center gap-1.5 transition-colors">
+      <Download size={14} /> Export RSVPs ({rsvps.length})
+    </button>
   );
 }
 
@@ -998,205 +1016,84 @@ function CreateEventPage({ user }: { user: User }) {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) { setError('Title is required.'); return; }
-    if (!date || !time) { setError('Pick a date and time.'); return; }
-
+    if (!title.trim()) { setError('Title required.'); return; }
+    if (!date || !time) { setError('Pick date and time.'); return; }
     const scheduledAt = new Date(`${date}T${time}`).getTime();
-    if (scheduledAt < Date.now()) { setError('Event must be in the future.'); return; }
+    if (scheduledAt < Date.now()) { setError('Must be in the future.'); return; }
 
-    setCreating(true);
-    setError('');
-
+    setCreating(true); setError('');
     try {
       const eventId = generateEventId();
-      const roomId = `party-${generateRoomId()}`;
-
+      const roomId = `party-${generateId()}`;
       await setDoc(doc(db, 'events', eventId), {
-        title: title.trim(),
-        description: description.trim(),
+        title: title.trim(), description: description.trim(),
         videoUrl: videoUrl.trim() || DEFAULT_VIDEOS[0].url,
-        scheduledAt,
-        createdAt: Date.now(),
-        createdBy: user.uid,
-        creatorName: user.displayName || 'Anonymous',
-        roomId,
-        status: 'upcoming'
+        scheduledAt, createdAt: Date.now(), createdBy: user.uid,
+        creatorName: user.displayName || 'Anonymous', roomId, status: 'upcoming'
       });
-
-      // Pre-create the room with the video
       await setDoc(doc(db, 'rooms', roomId), {
         videoUrl: videoUrl.trim() || DEFAULT_VIDEOS[0].url,
-        status: 'paused',
-        currentTime: 0,
-        lastUpdated: Date.now(),
-        hostId: user.uid
+        status: 'paused', currentTime: 0, lastUpdated: Date.now(), hostId: user.uid
       });
-
       navigate(`event/${eventId}`);
-    } catch (err) {
-      console.error('Failed to create event:', err);
-      setError('Failed to create event. Try again.');
-    } finally {
-      setCreating(false);
-    }
+    } catch { setError('Failed to create event.'); }
+    finally { setCreating(false); }
   };
 
   return (
-    <div className="flex-1 max-w-2xl mx-auto px-4 py-8">
-      <button onClick={() => navigate('events')}
-        className="flex items-center gap-1 text-sm text-neutral-500 hover:text-white mb-6 transition-colors">
-        <ArrowLeft size={14} /> Back
-      </button>
+    <div className="min-h-screen bg-neutral-950 text-white">
+      <PublicNav user={user} />
+      <div className="max-w-2xl mx-auto px-4 py-10">
+        <button onClick={() => navigate('events')} className="flex items-center gap-1 text-sm text-neutral-500 hover:text-white mb-6 transition-colors"><ArrowLeft size={14} /> Back</button>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+          <h1 className="text-3xl font-bold mb-2">Schedule a Watch Party</h1>
+          <p className="text-neutral-500 mb-8">Create an event page with countdown, RSVP, and shareable links.</p>
 
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-2xl font-bold mb-2">Schedule a Watch Party</h1>
-        <p className="text-sm text-neutral-500 mb-8">Create an event with a shareable page and countdown timer.</p>
+          {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-3 rounded-xl mb-6">{error}</div>}
 
-        {error && (
-          <div className="bg-red-600/20 border border-red-500/30 text-red-400 text-sm p-3 rounded-lg mb-6">{error}</div>
-        )}
-
-        <form onSubmit={handleCreate} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium mb-2">Event Title *</label>
-            <input type="text" value={title} onChange={(e) => setTitle(e.target.value)}
-              placeholder="Friday Night Movie Watch Party"
-              className="w-full px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500"
-              maxLength={100} />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Description</label>
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)}
-              placeholder="Tell people what you'll be watching and why they should join..."
-              rows={3}
-              className="w-full px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500 resize-none"
-              maxLength={500} />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
+          <form onSubmit={handleCreate} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium mb-2">Date *</label>
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-                min={new Date().toISOString().split('T')[0]}
-                className="w-full px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 [color-scheme:dark]" />
+              <label className="block text-sm font-medium mb-2">Event Title *</label>
+              <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Friday Night Movie Party"
+                className="w-full px-4 py-3 bg-neutral-900 border border-neutral-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" maxLength={100} />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-2">Time *</label>
-              <input type="time" value={time} onChange={(e) => setTime(e.target.value)}
-                className="w-full px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 [color-scheme:dark]" />
+              <label className="block text-sm font-medium mb-2">Description</label>
+              <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="What are we watching and why should people join?" rows={3}
+                className="w-full px-4 py-3 bg-neutral-900 border border-neutral-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500 resize-none" maxLength={500} />
             </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Video URL</label>
-            <input type="url" value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)}
-              placeholder="https://... (leave blank for default)"
-              className="w-full px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
-            <p className="text-xs text-neutral-600 mt-1">Supports direct MP4 links and VK video URLs</p>
-          </div>
-
-          <button type="submit" disabled={creating}
-            className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold transition-colors disabled:opacity-70 flex items-center justify-center gap-2">
-            {creating ? <><Loader className="w-5 h-5 animate-spin" /> Creating...</> : <><Calendar size={18} /> Create Watch Party</>}
-          </button>
-        </form>
-      </motion.div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Date *</label>
+                <input type="date" value={date} onChange={e => setDate(e.target.value)} min={new Date().toISOString().split('T')[0]}
+                  className="w-full px-4 py-3 bg-neutral-900 border border-neutral-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 [color-scheme:dark]" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">Time *</label>
+                <input type="time" value={time} onChange={e => setTime(e.target.value)}
+                  className="w-full px-4 py-3 bg-neutral-900 border border-neutral-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 [color-scheme:dark]" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2">Video URL</label>
+              <input type="url" value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="https://... (optional, blank = demo video)"
+                className="w-full px-4 py-3 bg-neutral-900 border border-neutral-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
+              <p className="text-xs text-neutral-600 mt-1">Supports MP4 links and VK video URLs</p>
+            </div>
+            <button type="submit" disabled={creating}
+              className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold text-lg transition-colors disabled:opacity-60 flex items-center justify-center gap-3">
+              {creating ? <><Loader className="w-5 h-5 animate-spin" /> Creating...</> : <><Calendar size={20} /> Create Watch Party</>}
+            </button>
+          </form>
+        </motion.div>
+      </div>
     </div>
   );
 }
 
-// --- Subscribe Modal ---
-
-function SubscribeModal({ onClose }: { onClose: () => void }) {
-  const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [error, setError] = useState('');
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim() || !email.includes('@')) { setError('Enter a valid email.'); return; }
-
-    setSubmitting(true);
-    setError('');
-
-    try {
-      // Check if already subscribed
-      const q = query(collection(db, 'subscribers'), where('email', '==', email.trim().toLowerCase()));
-      const existing = await getDocs(q);
-      if (!existing.empty) {
-        setSuccess(true);
-        return;
-      }
-
-      await addDoc(collection(db, 'subscribers'), {
-        email: email.trim().toLowerCase(),
-        name: name.trim(),
-        subscribedAt: Date.now(),
-        source: 'modal'
-      });
-      setSuccess(true);
-    } catch (err) {
-      console.error('Subscribe failed:', err);
-      setError('Failed to subscribe. Try again.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
-        className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 max-w-md w-full space-y-4"
-      >
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold flex items-center gap-2"><Bell size={18} className="text-indigo-400" /> Subscribe for Updates</h2>
-          <button onClick={onClose} className="p-1 text-neutral-500 hover:text-white transition-colors"><X size={18} /></button>
-        </div>
-
-        {success ? (
-          <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="text-center py-6 space-y-3">
-            <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center mx-auto">
-              <Mail size={28} className="text-green-400" />
-            </div>
-            <p className="text-green-400 font-semibold">You're subscribed!</p>
-            <p className="text-sm text-neutral-500">You'll get updates about new watch parties.</p>
-            <button onClick={onClose} className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-sm transition-colors">Close</button>
-          </motion.div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <p className="text-sm text-neutral-400">Get notified about upcoming watch parties and events.</p>
-
-            {error && <div className="text-sm text-red-400 bg-red-500/10 p-2 rounded-lg">{error}</div>}
-
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)}
-              placeholder="Name (optional)"
-              className="w-full px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-              placeholder="Email address *" required
-              className="w-full px-4 py-3 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-neutral-500" />
-
-            <button type="submit" disabled={submitting}
-              className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-semibold transition-colors disabled:opacity-70 flex items-center justify-center gap-2">
-              {submitting ? <><Loader className="w-4 h-4 animate-spin" /> Subscribing...</> : <><Mail size={16} /> Subscribe</>}
-            </button>
-
-            <p className="text-[10px] text-neutral-600 text-center">No spam. Unsubscribe anytime.</p>
-          </form>
-        )}
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// --- Room View (existing functionality, refactored) ---
+// =============================================
+// ROOM VIEW — Requires auth
+// =============================================
 
 function RoomView({ user, roomId }: { user: User; roomId: string }) {
   const [roomState, setRoomState] = useState<RoomState | null>(null);
@@ -1207,11 +1104,9 @@ function RoomView({ user, roomId }: { user: User; roomId: string }) {
   const [showChat, setShowChat] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [videoLoading, setVideoLoading] = useState(false);
-  const [actualVideoUrl, setActualVideoUrl] = useState<string>('');
+  const [actualVideoUrl, setActualVideoUrl] = useState('');
   const [vkUrl, setVkUrl] = useState('');
   const [copied, setCopied] = useState(false);
-  const [showSubscribeModal, setShowSubscribeModal] = useState(false);
-  const [subscriberCount, setSubscriberCount] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const syncIgnoreRef = useRef(false);
@@ -1219,553 +1114,280 @@ function RoomView({ user, roomId }: { user: User; roomId: string }) {
 
   const ROOM_ID = roomId;
 
-  // Subscriber count
+  const copyLink = () => { navigator.clipboard.writeText(`${BASE_URL}/#${ROOM_ID}`); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+
+  // Room state sync
   useEffect(() => {
-    const q = query(collection(db, 'subscribers'));
-    return onSnapshot(q, (snap) => setSubscriberCount(snap.size));
-  }, []);
-
-  const copyRoomLink = () => {
-    navigator.clipboard.writeText(`${BASE_URL}/#${ROOM_ID}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const createNewRoom = () => {
-    const id = generateRoomId();
-    navigate(id);
-  };
-
-  // Room State Sync
-  useEffect(() => {
-    if (!user) return;
     const roomRef = doc(db, 'rooms', ROOM_ID);
-    return onSnapshot(roomRef, (snapshot) => {
-      try {
-        if (snapshot.exists()) {
-          const data = snapshot.data() as RoomState;
-          const newIsHost = data.hostId === user.uid;
-          setRoomState(data);
-          setIsHost(newIsHost);
-          setError(null);
-
-          if (videoRef.current && !syncIgnoreRef.current) {
-            const video = videoRef.current;
-            const timeDiff = Math.abs(video.currentTime - data.currentTime);
-            const timeSinceUpdate = Date.now() - data.lastUpdated;
-
-            if (!newIsHost || timeSinceUpdate < 5000) {
-              if (timeDiff > 1 || (data.status === 'playing' && video.paused) || (data.status === 'paused' && !video.paused)) {
-                setTimeout(() => {
-                  if (video && !syncIgnoreRef.current) {
-                    video.currentTime = data.currentTime;
-                    if (data.status === 'playing') {
-                      video.play().catch(() => {});
-                    } else {
-                      video.pause();
-                    }
-                  }
-                }, 100);
-              }
+    return onSnapshot(roomRef, snap => {
+      if (snap.exists()) {
+        const data = snap.data() as RoomState;
+        const newIsHost = data.hostId === user.uid;
+        setRoomState(data); setIsHost(newIsHost); setError(null);
+        if (videoRef.current && !syncIgnoreRef.current) {
+          const v = videoRef.current;
+          const diff = Math.abs(v.currentTime - data.currentTime);
+          if (!newIsHost || Date.now() - data.lastUpdated < 5000) {
+            if (diff > 1 || (data.status === 'playing' && v.paused) || (data.status === 'paused' && !v.paused)) {
+              setTimeout(() => { if (videoRef.current && !syncIgnoreRef.current) { videoRef.current.currentTime = data.currentTime; data.status === 'playing' ? videoRef.current.play().catch(() => {}) : videoRef.current.pause(); } }, 100);
             }
           }
-        } else {
-          setDoc(roomRef, {
-            videoUrl: DEFAULT_VIDEOS[0].url,
-            status: 'paused',
-            currentTime: 0,
-            lastUpdated: Date.now(),
-            hostId: user.uid
-          }).catch(() => setError('Failed to initialize room.'));
         }
-      } catch { setError('Failed to sync with room.'); }
-    }, () => setError('Lost connection to room.'));
+      } else {
+        setDoc(roomRef, { videoUrl: DEFAULT_VIDEOS[0].url, status: 'paused', currentTime: 0, lastUpdated: Date.now(), hostId: user.uid }).catch(() => setError('Failed to init room.'));
+      }
+    }, () => setError('Lost connection.'));
   }, [user, isHost, ROOM_ID]);
 
   // Auto-claim host
   useEffect(() => {
     if (!user || !roomState || isHost) return;
-    const hostOnline = onlineUsers.some(u => u.uid === roomState.hostId);
-    if (!hostOnline && onlineUsers.length > 0) {
-      updateRoomState({ hostId: user.uid });
+    if (!onlineUsers.some(u => u.uid === roomState.hostId) && onlineUsers.length > 0) {
+      updateRoom({ hostId: user.uid });
     }
   }, [user, roomState, isHost, onlineUsers]);
 
-  // VK Video URL
+  // VK video
   useEffect(() => {
     if (!roomState?.videoUrl) { setActualVideoUrl(''); return; }
     if (roomState.videoUrl.startsWith('https://vk.com/video')) {
       setVideoLoading(true);
       getVkVideoMp4Url(roomState.videoUrl, (import.meta as any).env.VITE_VK_TOKEN || '')
-        .then(url => setActualVideoUrl(url))
-        .catch(() => { setError('Failed to load VK video.'); setActualVideoUrl(''); })
-        .finally(() => setVideoLoading(false));
-    } else {
-      setActualVideoUrl(roomState.videoUrl);
-    }
+        .then(u => setActualVideoUrl(u)).catch(() => { setError('Failed to load VK video.'); setActualVideoUrl(''); }).finally(() => setVideoLoading(false));
+    } else { setActualVideoUrl(roomState.videoUrl); }
   }, [roomState?.videoUrl]);
 
-  // Chat Sync
+  // Chat
   useEffect(() => {
-    if (!user) return;
     const q = query(collection(db, 'rooms', ROOM_ID, 'messages'), orderBy('timestamp', 'desc'), limit(50));
-    return onSnapshot(q, (snap) => {
-      const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatMessage));
-      setMessages(msgs.reverse());
-    });
-  }, [user, ROOM_ID]);
+    return onSnapshot(q, snap => { setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatMessage)).reverse()); });
+  }, [ROOM_ID]);
 
   // Reactions
   useEffect(() => {
-    if (!user) return;
     const q = query(collection(db, 'rooms', ROOM_ID, 'reactions'), orderBy('timestamp', 'desc'), limit(20));
-    return onSnapshot(q, (snap) => {
-      const rs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Reaction));
-      const now = Date.now();
-      setReactions(rs.filter(r => now - r.timestamp < 5000));
-    });
-  }, [user, ROOM_ID]);
+    return onSnapshot(q, snap => { const now = Date.now(); setReactions(snap.docs.map(d => ({ id: d.id, ...d.data() } as Reaction)).filter(r => now - r.timestamp < 5000)); });
+  }, [ROOM_ID]);
 
   // Presence
   useEffect(() => {
-    if (!user) return;
-    const presenceDocRef = doc(db, 'rooms', ROOM_ID, 'presence', user.uid);
+    const ref = doc(db, 'rooms', ROOM_ID, 'presence', user.uid);
     presenceRef.current = { uid: user.uid, displayName: user.displayName || 'Anonymous', lastSeen: Date.now(), isOnline: true };
-
-    const updatePresence = () => {
-      setDoc(presenceDocRef, { ...presenceRef.current, lastSeen: Date.now() }, { merge: true });
-    };
-    updatePresence();
-
-    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
-    events.forEach(e => document.addEventListener(e, updatePresence, { passive: true }));
-    const heartbeat = setInterval(updatePresence, 30000);
-
-    const presenceQuery = query(collection(db, 'rooms', ROOM_ID, 'presence'));
-    const unsub = onSnapshot(presenceQuery, (snap) => {
-      const now = Date.now();
-      setOnlineUsers(snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserPresence)).filter(u => now - u.lastSeen < 60000));
+    const up = () => setDoc(ref, { ...presenceRef.current, lastSeen: Date.now() }, { merge: true });
+    up();
+    const evts = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
+    evts.forEach(e => document.addEventListener(e, up, { passive: true }));
+    const hb = setInterval(up, 30000);
+    const unsub = onSnapshot(query(collection(db, 'rooms', ROOM_ID, 'presence')), snap => {
+      const now = Date.now(); setOnlineUsers(snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserPresence)).filter(u => now - u.lastSeen < 60000));
     });
-
-    const cleanup = () => setDoc(presenceDocRef, { ...presenceRef.current, isOnline: false, lastSeen: Date.now() }, { merge: true });
+    const cleanup = () => setDoc(ref, { ...presenceRef.current, isOnline: false, lastSeen: Date.now() }, { merge: true });
     window.addEventListener('beforeunload', cleanup);
-
-    return () => {
-      cleanup();
-      clearInterval(heartbeat);
-      events.forEach(e => document.removeEventListener(e, updatePresence));
-      window.removeEventListener('beforeunload', cleanup);
-      unsub();
-    };
+    return () => { cleanup(); clearInterval(hb); evts.forEach(e => document.removeEventListener(e, up)); window.removeEventListener('beforeunload', cleanup); unsub(); };
   }, [user, ROOM_ID]);
 
   // Host time sync
   useEffect(() => {
-    if (!isHost || !user || roomState?.status !== 'playing') return;
-    const interval = setInterval(() => {
-      if (videoRef.current && !syncIgnoreRef.current) {
-        const currentTime = videoRef.current.currentTime;
-        if (!roomState || Math.abs(currentTime - roomState.currentTime) > 0.5) {
-          updateRoomState({ currentTime });
-        }
+    if (!isHost || roomState?.status !== 'playing') return;
+    const iv = setInterval(() => {
+      if (videoRef.current && !syncIgnoreRef.current && roomState && Math.abs(videoRef.current.currentTime - roomState.currentTime) > 0.5) {
+        updateRoom({ currentTime: videoRef.current.currentTime });
       }
     }, 2000);
-    return () => clearInterval(interval);
-  }, [isHost, user, roomState?.status, roomState?.currentTime]);
+    return () => clearInterval(iv);
+  }, [isHost, roomState?.status, roomState?.currentTime]);
 
-  const updateRoomState = async (updates: Partial<RoomState>) => {
-    if (!user || !roomState) return;
-    const roomRef = doc(db, 'rooms', ROOM_ID);
-    await setDoc(roomRef, { ...roomState, ...updates, lastUpdated: Date.now() }, { merge: true });
+  const updateRoom = async (u: Partial<RoomState>) => {
+    if (!roomState) return;
+    await setDoc(doc(db, 'rooms', ROOM_ID), { ...roomState, ...u, lastUpdated: Date.now() }, { merge: true });
   };
 
-  const handleVideoAction = () => {
-    if (!videoRef.current || !user) return;
+  const togglePlay = () => {
+    if (!videoRef.current) return;
     syncIgnoreRef.current = true;
-    const newStatus = videoRef.current.paused ? 'playing' : 'paused';
-    updateRoomState({ status: newStatus, currentTime: videoRef.current.currentTime, hostId: user.uid });
-    if (newStatus === 'playing') { videoRef.current.play().catch(() => {}); } else { videoRef.current.pause(); }
+    const s = videoRef.current.paused ? 'playing' : 'paused';
+    updateRoom({ status: s, currentTime: videoRef.current.currentTime, hostId: user.uid });
+    s === 'playing' ? videoRef.current.play().catch(() => {}) : videoRef.current.pause();
     setTimeout(() => { syncIgnoreRef.current = false; }, 500);
   };
 
-  const sendMessage = async (text: string) => {
-    if (!user || !text.trim()) return;
-    const tempId = `temp-${Date.now()}`;
-    setMessages(prev => [...prev, { id: tempId, userId: user.uid, userName: user.displayName || 'Anonymous', text, timestamp: Date.now(), status: 'sending' }]);
-    try {
-      await addDoc(collection(db, 'rooms', ROOM_ID, 'messages'), { roomId: ROOM_ID, userId: user.uid, userName: user.displayName || 'Anonymous', text, timestamp: Date.now() });
-      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'sent' as const } : m));
-    } catch { setMessages(prev => prev.filter(m => m.id !== tempId)); }
+  const sendMsg = async (text: string) => {
+    if (!text.trim()) return;
+    const tid = `t-${Date.now()}`;
+    setMessages(p => [...p, { id: tid, userId: user.uid, userName: user.displayName || 'Anonymous', text, timestamp: Date.now(), status: 'sending' }]);
+    try { await addDoc(collection(db, 'rooms', ROOM_ID, 'messages'), { roomId: ROOM_ID, userId: user.uid, userName: user.displayName || 'Anonymous', text, timestamp: Date.now() }); }
+    catch { setMessages(p => p.filter(m => m.id !== tid)); }
   };
 
-  const sendReaction = async (emoji: string) => {
-    if (!user) return;
-    try {
-      if (navigator.vibrate) navigator.vibrate(50);
-      await addDoc(collection(db, 'rooms', ROOM_ID, 'reactions'), { roomId: ROOM_ID, userId: user.uid, emoji, timestamp: Date.now() });
-    } catch {}
+  const react = async (emoji: string) => {
+    try { if (navigator.vibrate) navigator.vibrate(50); await addDoc(collection(db, 'rooms', ROOM_ID, 'reactions'), { roomId: ROOM_ID, userId: user.uid, emoji, timestamp: Date.now() }); } catch {}
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-screen">
-      {/* Main Content */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="min-h-screen flex flex-col lg:flex-row overflow-hidden bg-neutral-950 text-white">
       <main className="flex-1 flex flex-col relative min-h-0">
         {/* Header */}
-        <header className="p-3 sm:p-4 border-b border-neutral-800 flex items-center justify-between bg-neutral-950/50 backdrop-blur-md z-10">
+        <header className="p-3 border-b border-neutral-800 flex items-center justify-between bg-neutral-950/50 backdrop-blur-md z-10">
           <div className="flex items-center gap-3">
-            <button onClick={() => navigate('home')} className="w-10 h-10 rounded-lg bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center transition-colors">
-              <Video size={20} />
-            </button>
+            <button onClick={() => navigate('home')} className="w-9 h-9 rounded-lg bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center transition-colors"><Video size={18} /></button>
             <div>
-              <h2 className="font-bold text-sm leading-tight">StreamParty</h2>
+              <h2 className="font-bold text-sm">StreamParty</h2>
               <div className="flex items-center gap-2 text-[10px] text-neutral-500 uppercase tracking-widest font-mono">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                Room: {ROOM_ID}
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> Room: {ROOM_ID}
               </div>
             </div>
           </div>
-
-          <div className="flex items-center gap-1.5 sm:gap-3">
-            <button onClick={copyRoomLink}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/30 transition-colors text-xs font-medium">
-              {copied ? <><Copy size={12} /> Copied!</> : <><Link size={12} /> Share</>}
+          <div className="flex items-center gap-1.5">
+            <button onClick={copyLink} className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/30 transition-colors text-xs font-medium">
+              {copied ? <><Copy size={12} /> Copied!</> : <><Share2 size={12} /> Share Room</>}
             </button>
-            <button onClick={createNewRoom}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white transition-colors text-xs font-medium">
-              <Plus size={12} /> New Room
-            </button>
-            <button onClick={() => navigate('events')}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white transition-colors text-xs font-medium">
-              <Calendar size={12} /> Events
-            </button>
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800">
-              <Users size={14} className="text-neutral-500" />
-              <span className="text-xs font-medium">{onlineUsers.length}</span>
+            <button onClick={() => navigate('events')} className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white transition-colors text-xs font-medium"><Calendar size={12} /> Events</button>
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-xs">
+              <Users size={13} className="text-neutral-500" /> {onlineUsers.length}
             </div>
-
-            {/* Chat Toggle */}
             <button onClick={() => setShowChat(!showChat)}
-              className={cn("p-2 rounded-lg transition-colors relative", showChat ? "bg-indigo-600/20 text-indigo-400" : "text-neutral-500 hover:text-white")}
-              title="Toggle Chat">
+              className={cn("p-2 rounded-lg transition-colors relative", showChat ? "bg-indigo-600/20 text-indigo-400" : "text-neutral-500 hover:text-white")}>
               <MessageCircle size={20} />
-              {messages.length > 0 && !showChat && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-indigo-500 rounded-full animate-pulse" />
-              )}
+              {messages.length > 0 && !showChat && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-indigo-500 rounded-full animate-pulse" />}
             </button>
-
-            <button onClick={() => auth.signOut()} className="p-2 text-neutral-500 hover:text-white transition-colors" title="Logout">
-              <LogOut size={20} />
-            </button>
+            <button onClick={() => auth.signOut()} className="p-2 text-neutral-500 hover:text-white transition-colors"><LogOut size={18} /></button>
           </div>
         </header>
 
-        {/* Error Banner */}
-        {error && (
-          <div className="bg-red-600/90 text-white px-4 py-2 text-sm flex items-center justify-between">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="ml-4 text-red-200 hover:text-white">✕</button>
-          </div>
-        )}
+        {error && <div className="bg-red-600/90 text-white px-4 py-2 text-sm flex items-center justify-between"><span>{error}</span><button onClick={() => setError(null)} className="ml-4">✕</button></div>}
 
-        {/* Video Area */}
+        {/* Video */}
         <div className="flex-1 bg-black relative group flex items-center justify-center overflow-hidden">
           {roomState?.videoUrl ? (
             <>
-              <video ref={videoRef} src={actualVideoUrl}
-                className="w-full h-full object-contain"
-                onPlay={() => { if (syncIgnoreRef.current || !isHost) return; updateRoomState({ status: 'playing' }); }}
-                onPause={() => { if (syncIgnoreRef.current || !isHost) return; updateRoomState({ status: 'paused' }); }}
-                onSeeked={() => { if (syncIgnoreRef.current || !isHost) return; updateRoomState({ currentTime: videoRef.current?.currentTime || 0 }); }}
-                controls={false}
-                onLoadedData={() => setVideoLoading(false)}
-                onLoadStart={() => setVideoLoading(true)}
-              />
-
-              {/* Video Controls Overlay */}
+              <video ref={videoRef} src={actualVideoUrl} className="w-full h-full object-contain"
+                onPlay={() => { if (syncIgnoreRef.current || !isHost) return; updateRoom({ status: 'playing' }); }}
+                onPause={() => { if (syncIgnoreRef.current || !isHost) return; updateRoom({ status: 'paused' }); }}
+                onSeeked={() => { if (syncIgnoreRef.current || !isHost) return; updateRoom({ currentTime: videoRef.current?.currentTime || 0 }); }}
+                controls={false} onLoadedData={() => setVideoLoading(false)} onLoadStart={() => setVideoLoading(true)} />
               <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <button onClick={handleVideoAction}
-                    className="p-4 rounded-full bg-black/60 backdrop-blur-md border border-white/20 hover:bg-black/80 transition-all transform hover:scale-110 active:scale-95 cursor-pointer">
-                    {roomState?.status === 'playing' ? <Pause size={32} className="text-white" /> : <Play size={32} className="text-white ml-1" />}
+                  <button onClick={togglePlay} className="p-4 rounded-full bg-black/60 backdrop-blur-md border border-white/20 hover:bg-black/80 transition-all cursor-pointer hover:scale-110 active:scale-95">
+                    {roomState?.status === 'playing' ? <Pause size={32} /> : <Play size={32} className="ml-1" />}
                   </button>
                 </div>
                 <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent">
-                  <div className="flex items-center gap-4 text-white">
-                    <div className="flex-1 relative">
-                      <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
-                        <div className="h-full bg-indigo-500 transition-all duration-200"
-                          style={{ width: videoRef.current ? `${(videoRef.current.currentTime / videoRef.current.duration) * 100}%` : '0%' }} />
-                      </div>
-                    </div>
-                    <div className="text-xs font-mono text-neutral-300">
-                      {videoRef.current
-                        ? `${Math.floor(videoRef.current.currentTime / 60)}:${(videoRef.current.currentTime % 60).toFixed(0).padStart(2, '0')} / ${Math.floor((videoRef.current.duration || 0) / 60)}:${((videoRef.current.duration || 0) % 60).toFixed(0).padStart(2, '0')}`
-                        : '0:00 / 0:00'}
-                    </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1"><div className="w-full h-1 bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 transition-all" style={{ width: videoRef.current ? `${(videoRef.current.currentTime / (videoRef.current.duration || 1)) * 100}%` : '0%' }} /></div></div>
+                    <div className="text-xs font-mono text-neutral-300">{videoRef.current ? `${Math.floor(videoRef.current.currentTime / 60)}:${(videoRef.current.currentTime % 60).toFixed(0).padStart(2, '0')}` : '0:00'}</div>
                   </div>
                 </div>
               </div>
             </>
-          ) : (
-            <div className="text-neutral-700 font-mono text-sm">NO VIDEO SELECTED</div>
-          )}
-
-          {videoLoading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-              <div className="animate-spin rounded-full h-12 w-12 border-2 border-indigo-500 border-t-transparent" />
-            </div>
-          )}
-
-          {/* Reaction Overlay */}
-          <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            <AnimatePresence>
-              {reactions.map(r => <FloatingEmoji key={r.id} emoji={r.emoji} />)}
-            </AnimatePresence>
-          </div>
-
-          {/* Host Status */}
-          {!isHost && roomState && (
-            <div className="absolute top-6 left-6 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-xs font-medium flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /> Watching with Host
-            </div>
-          )}
-
-          {roomState?.status === 'paused' && actualVideoUrl && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-indigo-600/80 backdrop-blur-md text-xs font-medium animate-pulse">
-              Hover &amp; click play to start
-            </div>
-          )}
+          ) : <div className="text-neutral-700 font-mono text-sm">NO VIDEO</div>}
+          {videoLoading && <div className="absolute inset-0 flex items-center justify-center bg-black/50"><div className="animate-spin rounded-full h-12 w-12 border-2 border-indigo-500 border-t-transparent" /></div>}
+          <div className="absolute inset-0 pointer-events-none overflow-hidden"><AnimatePresence>{reactions.map(r => <FloatingEmoji key={r.id} emoji={r.emoji} />)}</AnimatePresence></div>
+          {!isHost && roomState && <div className="absolute top-4 left-4 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-xs flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /> Watching with Host</div>}
         </div>
 
         {/* Bottom Controls */}
-        <div className="p-4 sm:p-6 border-t border-neutral-800 bg-neutral-900/30">
-          <div className="max-w-4xl mx-auto space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h3 className="text-sm font-semibold mb-1">Video Library</h3>
-                <p className="text-xs text-neutral-500">Select a video to broadcast.</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setShowSubscribeModal(true)}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/30 rounded-lg text-xs font-medium transition-colors sm:hidden">
-                  <Bell size={12} /> Subscribe
-                  {subscriberCount > 0 && <span className="bg-indigo-600 text-white text-[10px] px-1 rounded-full">{subscriberCount}</span>}
-                </button>
-                <label className="flex items-center gap-2 px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-lg cursor-pointer transition-colors text-xs font-medium">
-                  <Upload size={14} /> Upload
-                  <input type="file" className="hidden" accept="video/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const url = URL.createObjectURL(file);
-                        updateRoomState({ videoUrl: url, currentTime: 0, status: 'paused', hostId: user.uid });
-                      }
-                    }} />
-                </label>
-              </div>
+        <div className="p-4 border-t border-neutral-800 bg-neutral-900/30">
+          <div className="max-w-4xl mx-auto space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <h3 className="text-sm font-semibold">Video Library</h3>
+              <label className="flex items-center gap-2 px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg cursor-pointer text-xs font-medium transition-colors">
+                <Upload size={14} /> Upload
+                <input type="file" className="hidden" accept="video/*" onChange={e => { const f = e.target.files?.[0]; if (f) updateRoom({ videoUrl: URL.createObjectURL(f), currentTime: 0, status: 'paused', hostId: user.uid }); }} />
+              </label>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {DEFAULT_VIDEOS.map(v => (
-                <button key={v.url}
-                  onClick={() => updateRoomState({ videoUrl: v.url, currentTime: 0, status: 'paused', hostId: user.uid })}
-                  className={cn(
-                    "p-4 rounded-xl border text-left transition-all group relative overflow-hidden",
-                    roomState?.videoUrl === v.url
-                      ? "bg-gradient-to-br from-indigo-600/20 to-purple-600/20 border-indigo-500/50 shadow-lg shadow-indigo-500/20"
-                      : "bg-neutral-900 border-neutral-800 hover:border-neutral-700"
-                  )}>
-                  <div className="relative z-10">
-                    <div className="text-sm font-bold mb-2 truncate">{v.name}</div>
-                    <div className="text-[10px] text-neutral-500 uppercase tracking-tighter flex items-center gap-1"><Video size={10} /> Public Library</div>
-                  </div>
-                  {roomState?.videoUrl === v.url && (
-                    <div className="absolute top-3 right-3 w-3 h-3 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 shadow-[0_0_12px_rgba(99,102,241,0.8)] animate-pulse" />
-                  )}
+                <button key={v.url} onClick={() => updateRoom({ videoUrl: v.url, currentTime: 0, status: 'paused', hostId: user.uid })}
+                  className={cn("p-3 rounded-xl border text-left transition-all", roomState?.videoUrl === v.url ? "bg-indigo-600/10 border-indigo-500/30" : "bg-neutral-900 border-neutral-800 hover:border-neutral-700")}>
+                  <div className="text-sm font-bold truncate">{v.name}</div>
+                  <div className="text-[10px] text-neutral-500 mt-1">Public Library</div>
                 </button>
               ))}
             </div>
-
-            {/* VK Video */}
-            <div className="space-y-3">
-              <h4 className="text-sm font-semibold">VK Video</h4>
-              <div className="flex gap-2">
-                <input type="url" placeholder="https://vk.com/video-12345678_87654321" value={vkUrl}
-                  onChange={(e) => setVkUrl(e.target.value)}
-                  className="flex-1 px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                <button onClick={() => { if (vkUrl) { updateRoomState({ videoUrl: vkUrl, currentTime: 0, status: 'paused', hostId: user.uid }); setVkUrl(''); } }}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-sm font-medium transition-colors">
-                  Load
-                </button>
-              </div>
+            <div className="flex gap-2">
+              <input type="url" placeholder="VK video URL" value={vkUrl} onChange={e => setVkUrl(e.target.value)}
+                className="flex-1 px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              <button onClick={() => { if (vkUrl) { updateRoom({ videoUrl: vkUrl, currentTime: 0, status: 'paused', hostId: user.uid }); setVkUrl(''); } }}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-sm font-medium transition-colors">Load</button>
             </div>
-
-            {/* Share Row */}
+            {/* Share row */}
             <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-neutral-800">
-              <span className="text-xs text-neutral-500 mr-1">Share:</span>
-              <button onClick={copyRoomLink}
-                className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-xs transition-colors flex items-center gap-1.5">
-                <Copy size={12} /> {copied ? 'Copied!' : 'Copy Link'}
-              </button>
-              <button onClick={() => {
-                const text = `Watch with me on StreamParty! ${BASE_URL}/#${ROOM_ID}`;
-                window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
-              }}
-                className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-xs transition-colors flex items-center gap-1.5">
-                <Globe size={12} /> Twitter
-              </button>
+              <span className="text-xs text-neutral-600">Share:</span>
+              <button onClick={copyLink} className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-xs transition-colors flex items-center gap-1.5"><Copy size={12} /> {copied ? 'Copied!' : 'Link'}</button>
+              <button onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Watching on StreamParty! ${BASE_URL}/#${ROOM_ID}`)}`, '_blank')}
+                className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-xs transition-colors flex items-center gap-1.5"><Globe size={12} /> Twitter</button>
               <button onClick={() => window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(`${BASE_URL}/#${ROOM_ID}`)}`, '_blank')}
-                className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-xs transition-colors flex items-center gap-1.5">
-                <Globe size={12} /> Facebook
-              </button>
+                className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-xs transition-colors flex items-center gap-1.5"><Globe size={12} /> Facebook</button>
             </div>
           </div>
         </div>
       </main>
 
-      {/* Chat Backdrop (mobile) */}
+      {/* Chat */}
       <AnimatePresence>
-        {showChat && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setShowChat(false)} />
-        )}
+        {showChat && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setShowChat(false)} />}
       </AnimatePresence>
-
-      {/* Chat Sidebar */}
       <AnimatePresence>
         {showChat && (
-          <motion.aside
-            initial={{ x: '100%', opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: '100%', opacity: 0 }}
+          <motion.aside initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
             transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            className="fixed lg:relative top-0 right-0 z-50 w-full sm:w-96 h-full border-l border-neutral-800 flex flex-col bg-neutral-950"
-          >
-            {/* Close Button */}
-            <div className="p-3 border-b border-neutral-800 flex items-center justify-between bg-neutral-950">
-              <div className="flex items-center gap-2">
-                <MessageCircle size={16} className="text-indigo-400" />
-                <span className="text-sm font-semibold">Chat</span>
-                <span className="text-[10px] text-neutral-500 bg-neutral-800 px-1.5 py-0.5 rounded-full">{onlineUsers.length} online</span>
-              </div>
-              <button onClick={() => setShowChat(false)}
-                className="p-1.5 text-neutral-500 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors" title="Close chat">
-                <X size={18} />
-              </button>
+            className="fixed lg:relative top-0 right-0 z-50 w-full sm:w-96 h-full border-l border-neutral-800 flex flex-col bg-neutral-950">
+            <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
+              <span className="text-sm font-semibold flex items-center gap-2"><MessageCircle size={16} className="text-indigo-400" /> Chat <span className="text-[10px] bg-neutral-800 px-1.5 py-0.5 rounded-full text-neutral-500">{onlineUsers.length} online</span></span>
+              <button onClick={() => setShowChat(false)} className="p-1.5 text-neutral-500 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors"><X size={18} /></button>
             </div>
-
-            {/* Reactions Bar */}
-            <div className="p-3 border-b border-neutral-800">
-              <div className="flex items-center justify-around">
-                {REACTION_EMOJIS.map(emoji => (
-                  <button key={emoji.label} onClick={() => sendReaction(emoji.label)} data-emoji={emoji.label}
-                    className="p-2.5 rounded-full hover:bg-neutral-900 transition-all group">
-                    <emoji.icon className={cn("w-5 h-5", emoji.color)} />
-                  </button>
-                ))}
-              </div>
+            <div className="p-3 border-b border-neutral-800 flex items-center justify-around">
+              {REACTION_EMOJIS.map(em => (
+                <button key={em.label} onClick={() => react(em.label)} className="p-2 rounded-full hover:bg-neutral-900 transition-all"><em.icon className={cn("w-5 h-5", em.color)} /></button>
+              ))}
             </div>
-
-            {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {messages.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-neutral-600 space-y-2">
-                  <Smile size={32} strokeWidth={1} />
-                  <p className="text-xs font-mono">NO MESSAGES YET</p>
-                </div>
-              ) : (
-                messages.map(m => {
-                  const isOwn = m.userId === user.uid;
-                  return (
-                    <div key={m.id} className={cn("flex gap-3 max-w-[85%]", isOwn ? "ml-auto flex-row-reverse" : "")}>
-                      <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0",
-                        isOwn ? "bg-indigo-600 text-white" : "bg-neutral-700 text-neutral-300")}>
-                        {m.userName.charAt(0).toUpperCase()}
-                      </div>
-                      <div className={cn("flex flex-col gap-1", isOwn ? "items-end" : "items-start")}>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-neutral-400">{isOwn ? 'You' : m.userName}</span>
-                          <span className="text-[9px] text-neutral-600 font-mono">
-                            {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                        <div className={cn("px-3 py-2 rounded-2xl text-sm leading-relaxed break-words",
-                          isOwn ? "bg-indigo-600 text-white rounded-br-md" : "bg-neutral-800 text-neutral-200 rounded-bl-md")}>
-                          {m.text}
-                        </div>
-                      </div>
+                <div className="h-full flex flex-col items-center justify-center text-neutral-600 gap-2"><Smile size={32} strokeWidth={1} /><p className="text-xs font-mono">NO MESSAGES YET</p></div>
+              ) : messages.map(m => {
+                const own = m.userId === user.uid;
+                return (
+                  <div key={m.id} className={cn("flex gap-2.5 max-w-[85%]", own && "ml-auto flex-row-reverse")}>
+                    <div className={cn("w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0", own ? "bg-indigo-600" : "bg-neutral-700")}>{m.userName.charAt(0).toUpperCase()}</div>
+                    <div className={cn("flex flex-col gap-0.5", own ? "items-end" : "items-start")}>
+                      <span className="text-[10px] text-neutral-500">{own ? 'You' : m.userName} · {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      <div className={cn("px-3 py-2 rounded-2xl text-sm break-words", own ? "bg-indigo-600 rounded-br-md" : "bg-neutral-800 rounded-bl-md")}>{m.text}</div>
                     </div>
-                  );
-                })
-              )}
+                  </div>
+                );
+              })}
             </div>
-
-            {/* Chat Input */}
-            <div className="p-4 border-t border-neutral-800 bg-neutral-900/20">
-              <ChatInput onSend={sendMessage} />
-            </div>
+            <div className="p-4 border-t border-neutral-800"><ChatInput onSend={sendMsg} /></div>
           </motion.aside>
         )}
-      </AnimatePresence>
-
-      {/* Subscribe Modal (in-room) */}
-      <AnimatePresence>
-        {showSubscribeModal && <SubscribeModal onClose={() => setShowSubscribeModal(false)} />}
       </AnimatePresence>
     </motion.div>
   );
 }
 
-// --- Chat Input ---
+// --- Shared Components ---
 
-function ChatInput({ onSend }: { onSend: (text: string) => void }) {
+function ChatInput({ onSend }: { onSend: (t: string) => void }) {
   const [text, setText] = useState('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!text.trim()) return;
-    onSend(text.trim());
-    setText('');
-  };
-
   return (
-    <form onSubmit={handleSubmit} className="relative">
-      <input type="text" value={text} onChange={(e) => setText(e.target.value)}
-        placeholder="Say something..."
-        className="w-full bg-neutral-900 border border-neutral-800 rounded-xl py-3 pl-4 pr-12 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 transition-all placeholder:text-neutral-600"
-        maxLength={500} />
-      <button type="submit" disabled={!text.trim()}
-        className={cn("absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg transition-all",
-          text.trim() ? "text-indigo-500 hover:text-indigo-400 hover:bg-indigo-500/10" : "text-neutral-600 cursor-not-allowed")}>
-        <Send size={18} />
-      </button>
+    <form onSubmit={e => { e.preventDefault(); if (text.trim()) { onSend(text.trim()); setText(''); } }} className="relative">
+      <input type="text" value={text} onChange={e => setText(e.target.value)} placeholder="Say something..."
+        className="w-full bg-neutral-900 border border-neutral-800 rounded-xl py-3 pl-4 pr-12 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 placeholder-neutral-600" maxLength={500} />
+      <button type="submit" disabled={!text.trim()} className={cn("absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg transition-all", text.trim() ? "text-indigo-500 hover:text-indigo-400" : "text-neutral-700 cursor-not-allowed")}><Send size={18} /></button>
     </form>
   );
 }
 
-// --- Floating Emoji ---
-
 function FloatingEmoji({ emoji }: { key?: React.Key; emoji: string }) {
-  const randomX = useMemo(() => Math.random() * 80 + 10, []);
-  const randomDuration = useMemo(() => 3 + Math.random() * 2, []);
-  const randomScale = useMemo(() => 0.6 + Math.random() * 0.8, []);
-  const randomRotation = useMemo(() => Math.random() * 60 - 30, []);
-
+  const rx = useMemo(() => Math.random() * 80 + 10, []);
+  const rd = useMemo(() => 3 + Math.random() * 2, []);
+  const rs = useMemo(() => 0.6 + Math.random() * 0.8, []);
+  const rr = useMemo(() => Math.random() * 60 - 30, []);
   return (
     <motion.div
-      initial={{ y: '100%', x: `${randomX}%`, opacity: 0, scale: 0, rotate: 0 }}
-      animate={{
-        y: '-20%',
-        opacity: [0, 1, 1, 0.8, 0],
-        scale: [0, randomScale, randomScale * 1.2, randomScale],
-        rotate: [0, randomRotation, randomRotation * 0.5, 0],
-        x: [`${randomX}%`, `${randomX + (Math.random() * 30 - 15)}%`]
-      }}
-      exit={{ opacity: 0, scale: 0 }}
-      transition={{ duration: randomDuration, ease: [0.25, 0.46, 0.45, 0.94], times: [0, 0.2, 0.8, 1] }}
-      className="absolute bottom-0 text-4xl select-none pointer-events-none z-50 drop-shadow-lg"
-    >
-      {emoji}
-    </motion.div>
+      initial={{ y: '100%', x: `${rx}%`, opacity: 0, scale: 0 }}
+      animate={{ y: '-20%', opacity: [0, 1, 1, 0.8, 0], scale: [0, rs, rs * 1.2, rs], rotate: [0, rr, rr * 0.5, 0], x: [`${rx}%`, `${rx + Math.random() * 30 - 15}%`] }}
+      exit={{ opacity: 0, scale: 0 }} transition={{ duration: rd, ease: [0.25, 0.46, 0.45, 0.94], times: [0, 0.2, 0.8, 1] }}
+      className="absolute bottom-0 text-4xl select-none pointer-events-none z-50">{emoji}</motion.div>
   );
 }
