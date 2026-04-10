@@ -1,10 +1,9 @@
 {
-  "projectId": "casebuddy-transcribe-135-5c092",
-  "appId": "1:454736220624:web:4953487b4adbd9698fe9d5",
-  "apiKey": "AIzaSyBJT2QhlAz56TAiiKQhePPmKvJJSMnpFeU",
-  "authDomain": "casebuddy-transcribe-135-5c092.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-4e4fc672-d3db-450b-8f79-90fdd40c8af3",
-  "storageBucket": "casebuddy-transcribe-135-5c092.firebasestorage.app",
-  "messagingSenderId": "454736220624",
-  "measurementId": ""
+  "apiKey": "AIzaSyBFsXXw9DmQuyY2LSdtlusAnSgBxOBkvRQ",
+  "authDomain": "streamparty-ffeec.firebaseapp.com",
+  "projectId": "streamparty-ffeec",
+  "storageBucket": "streamparty-ffeec.firebasestorage.app",
+  "messagingSenderId": "821434024551",
+  "appId": "1:821434024551:web:494a73457ae473655e4ac2",
+  "measurementId": "G-X2KHH2FS8S"
 }
