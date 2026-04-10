@@ -398,7 +398,7 @@ export default function App() {
           <div className="flex items-center gap-4">
             <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800">
               <Users size={14} className="text-neutral-500" />
-              <span className="text-xs font-medium">1 Online</span>
+              <span className="text-xs font-medium">{onlineUsers.length} Online</span>
             </div>
             <button 
               onClick={handleLogout}
