@@ -665,30 +665,61 @@ export default function App() {
               </label>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {DEFAULT_VIDEOS.map((v) => (
-                <button
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+              className="grid grid-cols-1 sm:grid-cols-3 gap-4"
+            >
+              {DEFAULT_VIDEOS.map((v, index) => (
+                <motion.button
                   key={v.url}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.4 + index * 0.1 }}
+                  whileHover={{ scale: 1.02, y: -2 }}
+                  whileTap={{ scale: 0.98 }}
                   onClick={() => updateRoomState({ videoUrl: v.url, currentTime: 0, status: 'paused', hostId: user.uid })}
                   className={cn(
-                    "p-4 rounded-xl border text-left transition-all group relative overflow-hidden",
-                    roomState?.videoUrl === v.url 
-                      ? "bg-indigo-600/10 border-indigo-500/50" 
-                      : "bg-neutral-900 border-neutral-800 hover:border-neutral-700"
+                    "p-4 rounded-xl border text-left transition-all duration-300 group relative overflow-hidden",
+                    roomState?.videoUrl === v.url
+                      ? "bg-gradient-to-br from-indigo-600/20 to-purple-600/20 border-indigo-500/50 shadow-lg shadow-indigo-500/20"
+                      : "bg-neutral-900 border-neutral-800 hover:border-neutral-700 hover:shadow-md"
                   )}
                 >
+                  {/* Hover background effect */}
+                  <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+
                   <div className="relative z-10">
-                    <div className="text-xs font-bold mb-1 truncate">{v.name}</div>
-                    <div className="text-[10px] text-neutral-500 uppercase tracking-tighter">Public Library</div>
-                  </div>
-                  {roomState?.videoUrl === v.url && (
-                    <div className="absolute top-2 right-2">
-                      <div className="w-2 h-2 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.8)]" />
+                    <div className="text-sm font-bold mb-2 truncate">{v.name}</div>
+                    <div className="text-[10px] text-neutral-500 uppercase tracking-tighter flex items-center gap-1">
+                      <Video size={10} />
+                      Public Library
                     </div>
+                  </div>
+
+                  {roomState?.videoUrl === v.url && (
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className="absolute top-3 right-3"
+                    >
+                      <div className="w-3 h-3 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 shadow-[0_0_12px_rgba(99,102,241,0.8)] animate-pulse" />
+                    </motion.div>
                   )}
-                </button>
+
+                  {/* Play icon overlay on hover */}
+                  <motion.div
+                    className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+                    initial={false}
+                  >
+                    <div className="w-12 h-12 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center">
+                      <Play size={20} className="text-white ml-0.5" />
+                    </div>
+                  </motion.div>
+                </motion.button>
               ))}
-            </div>
+            </motion.div>
           </div>
         </div>
       </main>
