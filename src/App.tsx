@@ -85,9 +85,9 @@ interface UserPresence {
 // --- Constants ---
 
 const DEFAULT_VIDEOS = [
-  { name: 'Big Buck Bunny', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4' },
-  { name: 'Elephants Dream', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4' },
-  { name: 'Sintel', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4' },
+  { name: 'Blue Moon', url: 'https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-576p.mp4' },
+  { name: 'Mux Intro', url: 'https://storage.googleapis.com/muxdemofiles/mux-video-intro.mp4' },
+  { name: 'Mux Promo', url: 'https://storage.googleapis.com/muxdemofiles/mux.mp4' },
 ];
 
 const REACTION_EMOJIS = [
@@ -393,11 +393,17 @@ export default function App() {
           case 'auth/network-request-failed':
             setError('Network error occurred. Please check your connection and try again.');
             break;
+          case 'auth/unauthorized-domain':
+            setError('This domain is not authorized for Google sign-in. Use Guest login instead, or add this domain in Firebase Console → Auth → Settings.');
+            break;
+          case 'auth/operation-not-allowed':
+            setError('Google sign-in is not enabled. Use Guest login, or enable Google provider in Firebase Console → Auth → Sign-in method.');
+            break;
           default:
-            setError('Failed to sign in. Please try again.');
+            setError('Google sign-in failed. Try "Continue as Guest" instead.');
         }
       } else {
-        setError('An unexpected error occurred. Please try again.');
+        setError('An unexpected error occurred. Try "Continue as Guest" instead.');
       }
     }
   };
@@ -443,11 +449,17 @@ export default function App() {
           case 'auth/network-request-failed':
             setError('Network error occurred. Please check your connection and try again.');
             break;
+          case 'auth/operation-not-allowed':
+            setError('Email/Password sign-in is not enabled. Use Guest login, or enable Email/Password in Firebase Console → Auth → Sign-in method.');
+            break;
+          case 'auth/invalid-credential':
+            setError(isSignUp ? 'Failed to create account. Try "Continue as Guest" instead.' : 'Invalid credentials. Try signing up first, or use "Continue as Guest".');
+            break;
           default:
-            setError(isSignUp ? 'Failed to create account. Please try again.' : 'Failed to sign in. Please try again.');
+            setError(isSignUp ? 'Failed to create account. Try "Continue as Guest" instead.' : 'Failed to sign in. Try "Continue as Guest" instead.');
         }
       } else {
-        setError('An unexpected error occurred. Please try again.');
+        setError('An unexpected error occurred. Try "Continue as Guest" instead.');
       }
     }
   };
@@ -672,6 +684,14 @@ export default function App() {
               className="text-neutral-400 text-lg"
             >
               Watch videos together in real-time with friends.
+            </motion.p>
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.5 }}
+              className="text-neutral-600 text-xs tracking-wider uppercase"
+            >
+              by Don Matthews
             </motion.p>
           </div>
 
