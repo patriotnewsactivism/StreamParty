@@ -117,6 +117,9 @@ export default function App() {
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const syncIgnoreRef = useRef(false);
+
+  const [actualVideoUrl, setActualVideoUrl] = useState<string>('');
+  const [vkUrl, setVkUrl] = useState('');
   const presenceRef = useRef<any>(null);
 
   // Auth
@@ -192,6 +195,31 @@ export default function App() {
       setError('Lost connection to room. Please refresh the page.');
     });
   }, [user, isHost]);
+
+  // Handle VK video URL resolution
+  useEffect(() => {
+    if (!roomState?.videoUrl) {
+      setActualVideoUrl('');
+      return;
+    }
+    if (roomState.videoUrl.startsWith('https://vk.com/video')) {
+      setVideoLoading(true);
+      getVkVideoMp4Url(roomState.videoUrl, (import.meta as any).env.VITE_VK_TOKEN || '')
+        .then(url => {
+          setActualVideoUrl(url);
+        })
+        .catch(error => {
+          console.error('Failed to load VK video:', error);
+          setError('Failed to load VK video. Check the URL and token.');
+          setActualVideoUrl('');
+        })
+        .finally(() => {
+          setVideoLoading(false);
+        });
+    } else {
+      setActualVideoUrl(roomState.videoUrl);
+    }
+  }, [roomState?.videoUrl]);
 
   // Chat Sync
   useEffect(() => {
@@ -855,7 +883,7 @@ export default function App() {
             <>
               <video
                 ref={videoRef}
-                src={roomState.videoUrl}
+                src={actualVideoUrl}
                 className="w-full h-full object-contain"
                 onPlay={() => {
                   if (!isHost) return;
@@ -1062,6 +1090,34 @@ export default function App() {
                 </motion.button>
               ))}
             </motion.div>
+
+            {/* VK Video URL Input */}
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-sm font-semibold">VK Video</h4>
+                <p className="text-xs text-neutral-500">Enter a VK video URL to watch private or public videos.</p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  placeholder="https://vk.com/video-12345678_87654321"
+                  value={vkUrl}
+                  onChange={(e) => setVkUrl(e.target.value)}
+                  className="flex-1 px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                />
+                <button
+                  onClick={() => {
+                    if (vkUrl) {
+                      updateRoomState({ videoUrl: vkUrl, currentTime: 0, status: 'paused', hostId: user.uid });
+                      setVkUrl('');
+                    }
+                  }}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Load Video
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </motion.main>
