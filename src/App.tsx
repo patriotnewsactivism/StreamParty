@@ -27,6 +27,9 @@ import {
 } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import {
+  Copy,
+  Link,
+  Plus,
   Play,
   Pause,
   Send,
@@ -95,7 +98,18 @@ const REACTION_EMOJIS = [
   { icon: Angry, color: 'text-orange-500', label: '😡' },
 ];
 
-const ROOM_ID = 'main-party';
+// Room ID from URL hash, defaults to 'main-party'
+function getRoomIdFromUrl(): string {
+  const hash = window.location.hash.slice(1);
+  return hash || 'main-party';
+}
+
+function generateRoomId(): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let id = '';
+  for (let i = 0; i < 8; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
 
 // --- Components ---
 
@@ -114,6 +128,8 @@ export default function App() {
   const [onlineUsers, setOnlineUsers] = useState<UserPresence[]>([]);
   const [isHost, setIsHost] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [roomId, setRoomId] = useState(getRoomIdFromUrl());
+  const [copied, setCopied] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const syncIgnoreRef = useRef(false);
@@ -121,6 +137,28 @@ export default function App() {
   const [actualVideoUrl, setActualVideoUrl] = useState<string>('');
   const [vkUrl, setVkUrl] = useState('');
   const presenceRef = useRef<any>(null);
+
+  // Sync room ID with URL hash
+  useEffect(() => {
+    const onHashChange = () => setRoomId(getRoomIdFromUrl());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  const ROOM_ID = roomId;
+
+  const createNewRoom = () => {
+    const id = generateRoomId();
+    window.location.hash = id;
+  };
+
+  const copyRoomLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}#${ROOM_ID}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   // Auth
   useEffect(() => {
@@ -194,7 +232,7 @@ export default function App() {
       console.error('Room sync error:', error);
       setError('Lost connection to room. Please refresh the page.');
     });
-  }, [user, isHost]);
+  }, [user, isHost, ROOM_ID]);
 
   // Handle VK video URL resolution
   useEffect(() => {
@@ -229,7 +267,7 @@ export default function App() {
       const msgs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ChatMessage));
       setMessages(msgs.reverse());
     });
-  }, [user]);
+  }, [user, ROOM_ID]);
 
   // Reactions Sync
   useEffect(() => {
@@ -241,7 +279,7 @@ export default function App() {
       const now = Date.now();
       setReactions(rs.filter(r => now - r.timestamp < 5000));
     });
-  }, [user]);
+  }, [user, ROOM_ID]);
 
   // User Presence Tracking
   useEffect(() => {
@@ -312,7 +350,7 @@ export default function App() {
       window.removeEventListener('beforeunload', cleanup);
       unsubscribePresence();
     };
-  }, [user]);
+  }, [user, ROOM_ID]);
 
   // Host periodic time sync with improved frequency
   useEffect(() => {
@@ -655,7 +693,7 @@ export default function App() {
             ) : (
               <>
                 <motion.img
-                  src="https://www.google.com/favicon.ico"
+                  src="/google.svg"
                   className="w-5 h-5"
                   alt="Google"
                   whileHover={{ rotate: 360 }}
@@ -827,7 +865,22 @@ export default function App() {
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4">
+            {/* Room Actions */}
+            <button
+              onClick={copyRoomLink}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/30 transition-colors text-xs font-medium"
+              title="Copy room link"
+            >
+              {copied ? <><Copy size={12} /> Copied!</> : <><Link size={12} /> Share</>}
+            </button>
+            <button
+              onClick={createNewRoom}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700 transition-colors text-xs font-medium"
+              title="Create new room"
+            >
+              <Plus size={12} /> New Room
+            </button>
             <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800">
               <Users size={14} className="text-neutral-500" />
               <span className="text-xs font-medium">{onlineUsers.length} Online</span>
