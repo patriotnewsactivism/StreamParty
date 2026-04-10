@@ -64,14 +64,16 @@ import {
   CheckCircle,
   UserPlus,
   Tv,
-  PartyPopper
+  PartyPopper,
+  RotateCcw,
+  StopCircle
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { getVkVideoMp4Url } from './lib/vk';
 
 // --- Types ---
 
-type AppPage = 'home' | 'events' | 'event-detail' | 'create-event' | 'room';
+type AppPage = 'home' | 'events' | 'event-detail' | 'create-event' | 'room' | 'replay';
 
 interface RouteInfo {
   page: AppPage;
@@ -120,6 +122,7 @@ interface WatchPartyEvent {
   creatorName: string;
   roomId: string;
   status: 'upcoming' | 'live' | 'ended';
+  endedAt?: number;
   rsvpCount?: number;
 }
 
@@ -155,6 +158,7 @@ const REACTION_EMOJIS = [
 ];
 
 const BASE_URL = 'https://donmatthews.live';
+const REPLAY_WINDOW_MS = 72 * 60 * 60 * 1000; // 72 hours in ms
 
 // --- Helpers ---
 
@@ -164,6 +168,7 @@ function parseRoute(): RouteInfo {
   if (hash === 'events') return { page: 'events', param: '' };
   if (hash === 'create-event') return { page: 'create-event', param: '' };
   if (hash.startsWith('event/')) return { page: 'event-detail', param: hash.slice(6) };
+  if (hash.startsWith('replay/')) return { page: 'replay', param: hash.slice(7) };
   return { page: 'room', param: hash };
 }
 
@@ -203,6 +208,23 @@ function calculateTimeLeft(target: number) {
   };
 }
 
+function isReplayAvailable(event: WatchPartyEvent): boolean {
+  if (!event.endedAt) return false;
+  return Date.now() - event.endedAt < REPLAY_WINDOW_MS;
+}
+
+function replayExpiresAt(event: WatchPartyEvent): number {
+  return (event.endedAt || 0) + REPLAY_WINDOW_MS;
+}
+
+function formatDuration(ms: number): string {
+  if (ms <= 0) return 'Expired';
+  const hours = Math.floor(ms / (1000 * 60 * 60));
+  const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 function useCountdown(targetDate: number) {
   const [timeLeft, setTimeLeft] = useState(calculateTimeLeft(targetDate));
   useEffect(() => {
@@ -234,6 +256,7 @@ export default function App() {
   if (route.page === 'home') return <HomePage user={user} authLoading={authLoading} />;
   if (route.page === 'events') return <EventsPage user={user} authLoading={authLoading} />;
   if (route.page === 'event-detail') return <EventDetailPage eventId={route.param} user={user} authLoading={authLoading} />;
+  if (route.page === 'replay') return <ReplayPage eventId={route.param} user={user} />;
 
   // Auth-required pages
   if (authLoading) {
@@ -400,8 +423,9 @@ function HomePage({ user, authLoading }: { user: User | null; authLoading: boole
     } catch { setSubStatus('error'); }
   };
 
-  const liveEvents = events.filter(e => e.scheduledAt <= Date.now());
+  const liveEvents = events.filter(e => e.scheduledAt <= Date.now() && !e.endedAt);
   const upcomingEvents = events.filter(e => e.scheduledAt > Date.now());
+  const replayEvents = events.filter(e => e.endedAt && isReplayAvailable(e));
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
@@ -546,6 +570,18 @@ function HomePage({ user, authLoading }: { user: User | null; authLoading: boole
         )}
       </div>
 
+      {/* Recent Replays */}
+      {replayEvents.length > 0 && (
+        <div className="max-w-6xl mx-auto px-4 py-14 border-t border-neutral-800">
+          <div className="flex items-center justify-between mb-8">
+            <h2 className="text-2xl font-bold flex items-center gap-3"><RotateCcw size={24} className="text-purple-400" /> Watch the Replay</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {replayEvents.slice(0, 3).map((evt, i) => <EventCard key={evt.id} event={evt} index={i} />)}
+          </div>
+        </div>
+      )}
+
       {/* Quick Join */}
       <div className="border-t border-neutral-800">
         <div className="max-w-3xl mx-auto px-4 py-14 text-center space-y-5">
@@ -584,23 +620,45 @@ function QuickRoomEntry() {
 
 function EventCard({ event, index }: { key?: React.Key; event: WatchPartyEvent; index: number }) {
   const countdown = useCountdown(event.scheduledAt);
-  const isLive = countdown.isLive;
+  const isLive = countdown.isLive && !event.endedAt;
+  const hasReplay = isReplayAvailable(event);
+  const isEnded = !!event.endedAt;
   const [rsvpCount, setRsvpCount] = useState(0);
+  const [replayTimeLeft, setReplayTimeLeft] = useState('');
 
   useEffect(() => {
     return onSnapshot(query(collection(db, 'events', event.id, 'rsvps')), snap => setRsvpCount(snap.size));
   }, [event.id]);
 
+  useEffect(() => {
+    if (!hasReplay) return;
+    const update = () => setReplayTimeLeft(formatDuration(replayExpiresAt(event) - Date.now()));
+    update();
+    const iv = setInterval(update, 60000);
+    return () => clearInterval(iv);
+  }, [hasReplay, event.endedAt]);
+
+  const handleClick = () => {
+    if (hasReplay) navigate(`replay/${event.id}`);
+    else if (isLive) navigate(event.roomId);
+    else navigate(`event/${event.id}`);
+  };
+
   return (
     <motion.button
       initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.08 }}
       whileHover={{ y: -4 }}
-      onClick={() => navigate(isLive ? event.roomId : `event/${event.id}`)}
+      onClick={handleClick}
       className={cn("text-left rounded-2xl border transition-all group relative overflow-hidden w-full",
-        isLive ? "bg-red-600/5 border-red-500/20 hover:border-red-500/40" : "bg-neutral-900/50 border-neutral-800 hover:border-neutral-700"
+        isLive ? "bg-red-600/5 border-red-500/20 hover:border-red-500/40"
+        : hasReplay ? "bg-purple-600/5 border-purple-500/20 hover:border-purple-500/40"
+        : "bg-neutral-900/50 border-neutral-800 hover:border-neutral-700"
       )}>
       {/* Top accent bar */}
-      <div className={cn("h-1 w-full", isLive ? "bg-gradient-to-r from-red-600 to-orange-500" : "bg-gradient-to-r from-indigo-600 to-purple-600")} />
+      <div className={cn("h-1 w-full",
+        isLive ? "bg-gradient-to-r from-red-600 to-orange-500"
+        : hasReplay ? "bg-gradient-to-r from-purple-600 to-pink-500"
+        : "bg-gradient-to-r from-indigo-600 to-purple-600")} />
 
       <div className="p-5 space-y-3">
         {/* Badge */}
@@ -608,6 +666,13 @@ function EventCard({ event, index }: { key?: React.Key; event: WatchPartyEvent; 
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/20 text-red-400 text-xs font-bold uppercase tracking-wider">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /> Live Now
           </span>
+        ) : hasReplay ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-500/20 text-purple-400 text-xs font-bold uppercase tracking-wider">
+              <RotateCcw size={11} /> Replay Available
+            </span>
+            <span className="text-[10px] text-neutral-500">Expires in {replayTimeLeft}</span>
+          </div>
         ) : (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-400 text-xs font-medium">
             <Clock size={11} /> {formatDate(event.scheduledAt)} · {formatTime(event.scheduledAt)}
@@ -617,8 +682,8 @@ function EventCard({ event, index }: { key?: React.Key; event: WatchPartyEvent; 
         <h3 className="font-bold text-lg leading-tight">{event.title}</h3>
         {event.description && <p className="text-sm text-neutral-500 line-clamp-2">{event.description}</p>}
 
-        {/* Countdown */}
-        {!isLive && (
+        {/* Countdown (only for upcoming) */}
+        {!isLive && !isEnded && (
           <div className="flex items-center gap-3 py-2">
             {[
               { v: countdown.days, l: 'd' },
@@ -644,8 +709,12 @@ function EventCard({ event, index }: { key?: React.Key; event: WatchPartyEvent; 
 
         {/* Action hint */}
         <div className={cn("mt-2 text-xs font-semibold flex items-center gap-1.5 transition-colors",
-          isLive ? "text-red-400 group-hover:text-red-300" : "text-indigo-400 group-hover:text-indigo-300")}>
-          {isLive ? <><Play size={12} /> Join the watch party</> : <><Eye size={12} /> View event & RSVP</>}
+          isLive ? "text-red-400 group-hover:text-red-300"
+          : hasReplay ? "text-purple-400 group-hover:text-purple-300"
+          : "text-indigo-400 group-hover:text-indigo-300")}>
+          {isLive ? <><Play size={12} /> Join the watch party</>
+          : hasReplay ? <><RotateCcw size={12} /> Watch the replay</>
+          : <><Eye size={12} /> View event & RSVP</>}
         </div>
       </div>
     </motion.button>
@@ -666,8 +735,8 @@ function EventsPage({ user, authLoading }: { user: User | null; authLoading: boo
 
   const now = Date.now();
   const filtered = events.filter(e => {
-    if (filter === 'upcoming') return e.scheduledAt > now - 3600000;
-    if (filter === 'past') return e.scheduledAt <= now - 3600000;
+    if (filter === 'upcoming') return e.scheduledAt > now && !e.endedAt;
+    if (filter === 'past') return !!e.endedAt || e.scheduledAt <= now - 3600000;
     return true;
   });
 
@@ -747,7 +816,9 @@ function EventDetailPage({ eventId, user, authLoading }: { eventId: string; user
   }, [event?.roomId]);
 
   const countdown = useCountdown(event?.scheduledAt || Date.now() + 9e9);
-  const isLive = event ? event.scheduledAt <= Date.now() : false;
+  const isLive = event ? (event.scheduledAt <= Date.now() && !event.endedAt) : false;
+  const hasReplay = event ? isReplayAvailable(event) : false;
+  const isEnded = event ? !!event.endedAt : false;
 
   const eventUrl = `${BASE_URL}/#event/${eventId}`;
   const roomUrl = event ? `${BASE_URL}/#${event.roomId}` : '';
@@ -820,8 +891,27 @@ function EventDetailPage({ eventId, user, authLoading }: { eventId: string; user
             <p className="text-sm text-neutral-600">Hosted by {event.creatorName}</p>
           </div>
 
-          {/* Countdown or Live CTA */}
-          {isLive ? (
+          {/* Countdown, Live CTA, or Replay CTA */}
+          {hasReplay ? (
+            <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }}
+              className="p-8 rounded-2xl bg-gradient-to-br from-purple-600/15 to-pink-600/10 border border-purple-500/20 text-center space-y-5">
+              <div className="flex items-center justify-center gap-3">
+                <RotateCcw size={24} className="text-purple-400" />
+                <span className="text-2xl font-bold text-purple-400">Replay Available</span>
+              </div>
+              <p className="text-neutral-300">This watch party has ended. Watch the replay with full chat history.</p>
+              <p className="text-sm text-neutral-500">Replay expires in {formatDuration(replayExpiresAt(event) - Date.now())}</p>
+              <button onClick={() => navigate(`replay/${event.id}`)}
+                className="px-10 py-4 bg-purple-600 hover:bg-purple-500 rounded-xl font-bold text-xl transition-all shadow-lg shadow-purple-600/30 hover:shadow-purple-500/40 flex items-center justify-center gap-3 mx-auto">
+                <RotateCcw size={22} /> Watch Replay
+              </button>
+            </motion.div>
+          ) : isEnded ? (
+            <div className="p-8 rounded-2xl bg-neutral-900 border border-neutral-800 text-center space-y-3">
+              <p className="text-xl font-bold text-neutral-500">This Event Has Ended</p>
+              <p className="text-sm text-neutral-600">The replay window has expired.</p>
+            </div>
+          ) : isLive ? (
             <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }}
               className="p-8 rounded-2xl bg-gradient-to-br from-red-600/15 to-orange-600/10 border border-red-500/20 text-center space-y-5">
               <div className="flex items-center justify-center gap-3">
@@ -1000,6 +1090,178 @@ function ExportSubscribers({ eventId, rsvps }: { eventId: string; rsvps: RSVP[] 
     <button onClick={exportCSV} className="text-sm text-neutral-500 hover:text-neutral-300 flex items-center gap-1.5 transition-colors">
       <Download size={14} /> Export RSVPs ({rsvps.length})
     </button>
+  );
+}
+
+// --- Replay Page (Public — no login required) ---
+
+function ReplayPage({ eventId, user }: { eventId: string; user: User | null }) {
+  const [event, setEvent] = useState<WatchPartyEvent | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [videoUrl, setVideoUrl] = useState('');
+  const [videoLoading, setVideoLoading] = useState(false);
+  const [replayTimeLeft, setReplayTimeLeft] = useState('');
+  const [copied, setCopied] = useState('');
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    return onSnapshot(doc(db, 'events', eventId), snap => {
+      if (snap.exists()) setEvent({ id: snap.id, ...snap.data() } as WatchPartyEvent);
+      setLoading(false);
+    });
+  }, [eventId]);
+
+  // Load all chat messages from the room
+  useEffect(() => {
+    if (!event?.roomId) return;
+    const q = query(collection(db, 'rooms', event.roomId, 'messages'), orderBy('timestamp', 'asc'));
+    return onSnapshot(q, snap => {
+      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatMessage)));
+    });
+  }, [event?.roomId]);
+
+  // Resolve video URL (VK or direct)
+  useEffect(() => {
+    if (!event?.videoUrl) return;
+    if (event.videoUrl.startsWith('https://vk.com/video')) {
+      setVideoLoading(true);
+      getVkVideoMp4Url(event.videoUrl, (import.meta as any).env.VITE_VK_TOKEN || '')
+        .then(u => setVideoUrl(u)).catch(() => setVideoUrl('')).finally(() => setVideoLoading(false));
+    } else {
+      setVideoUrl(event.videoUrl);
+    }
+  }, [event?.videoUrl]);
+
+  // Replay expiry timer
+  useEffect(() => {
+    if (!event?.endedAt) return;
+    const update = () => setReplayTimeLeft(formatDuration(replayExpiresAt(event) - Date.now()));
+    update();
+    const iv = setInterval(update, 60000);
+    return () => clearInterval(iv);
+  }, [event?.endedAt]);
+
+  const copy = (text: string, label: string) => { navigator.clipboard.writeText(text); setCopied(label); setTimeout(() => setCopied(''), 2000); };
+  const replayUrl = `${BASE_URL}/#replay/${eventId}`;
+
+  if (loading) return <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center"><Loader className="w-8 h-8 animate-spin text-neutral-600" /></div>;
+
+  if (!event) return (
+    <div className="min-h-screen bg-neutral-950 text-white"><PublicNav user={user} />
+      <div className="flex items-center justify-center py-20"><p className="text-neutral-500">Event not found.</p></div>
+    </div>
+  );
+
+  // Check if replay expired
+  if (!isReplayAvailable(event)) {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white">
+        <PublicNav user={user} />
+        <div className="max-w-2xl mx-auto px-4 py-20 text-center space-y-6">
+          <div className="w-20 h-20 rounded-2xl bg-neutral-900 flex items-center justify-center mx-auto"><RotateCcw size={32} className="text-neutral-700" /></div>
+          <h1 className="text-2xl font-bold">Replay Expired</h1>
+          <p className="text-neutral-500">The 72-hour replay window for "{event.title}" has passed.</p>
+          <button onClick={() => navigate('events')} className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-semibold transition-colors">Browse Events</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-neutral-950 text-white">
+      <PublicNav user={user} />
+
+      <div className="max-w-7xl mx-auto px-4 py-6">
+        <button onClick={() => navigate(`event/${eventId}`)} className="flex items-center gap-1 text-sm text-neutral-500 hover:text-white mb-6 transition-colors">
+          <ArrowLeft size={14} /> Event Details
+        </button>
+
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/20 border border-purple-500/30 text-purple-400 text-xs font-bold uppercase tracking-wider">
+                  <RotateCcw size={12} /> Replay
+                </span>
+                <span className="text-xs text-neutral-500">Expires in {replayTimeLeft}</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-bold">{event.title}</h1>
+              <p className="text-sm text-neutral-500 mt-1">Hosted by {event.creatorName} · {formatDateTime(event.scheduledAt)}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Watch the replay of "${event.title}" on StreamParty!\n${replayUrl}`)}`, '_blank')}
+                className="px-3 py-2 bg-[#1DA1F2]/10 hover:bg-[#1DA1F2]/20 border border-[#1DA1F2]/20 rounded-lg text-[#1DA1F2] text-xs font-medium transition-colors flex items-center gap-1.5"><Globe size={14} /> Share</button>
+              <button onClick={() => copy(replayUrl, 'link')}
+                className="px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
+                <Copy size={14} /> {copied === 'link' ? '✓ Copied!' : 'Copy Link'}
+              </button>
+            </div>
+          </div>
+
+          {/* Main content — Video + Chat side by side */}
+          <div className="flex flex-col lg:flex-row gap-6">
+            {/* Video Player */}
+            <div className="flex-1">
+              <div className="bg-black rounded-2xl overflow-hidden border border-neutral-800 relative aspect-video">
+                {videoUrl ? (
+                  <>
+                    <video ref={videoRef} src={videoUrl} controls className="w-full h-full object-contain"
+                      onLoadStart={() => setVideoLoading(true)} onLoadedData={() => setVideoLoading(false)} />
+                    {videoLoading && <div className="absolute inset-0 flex items-center justify-center bg-black/50"><div className="animate-spin rounded-full h-12 w-12 border-2 border-purple-500 border-t-transparent" /></div>}
+                  </>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-neutral-700 font-mono text-sm">VIDEO UNAVAILABLE</div>
+                )}
+              </div>
+              {event.description && (
+                <div className="mt-4 p-4 bg-neutral-900/50 rounded-xl border border-neutral-800">
+                  <p className="text-sm text-neutral-400">{event.description}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Chat History */}
+            <div className="lg:w-96 flex flex-col rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden" style={{ maxHeight: 'calc(56.25vw + 100px)', minHeight: '400px' }}>
+              <div className="p-4 border-b border-neutral-800 flex items-center justify-between">
+                <span className="text-sm font-semibold flex items-center gap-2">
+                  <MessageCircle size={16} className="text-purple-400" /> Chat History
+                </span>
+                <span className="text-xs text-neutral-500">{messages.length} messages</span>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {messages.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-neutral-600 gap-2">
+                    <MessageCircle size={32} strokeWidth={1} />
+                    <p className="text-xs font-mono">NO CHAT MESSAGES</p>
+                  </div>
+                ) : messages.map(m => (
+                  <div key={m.id} className="flex gap-2.5">
+                    <div className="w-7 h-7 rounded-full bg-neutral-700 flex items-center justify-center text-xs font-bold flex-shrink-0">
+                      {m.userName.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[10px] text-neutral-500">{m.userName} · {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      <div className="px-3 py-2 rounded-2xl rounded-bl-md bg-neutral-800 text-sm break-words">{m.text}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="p-3 border-t border-neutral-800 text-center">
+                <p className="text-[10px] text-neutral-600 uppercase tracking-wider">Read-only replay · Chat is closed</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Expiry notice */}
+          <div className="p-4 rounded-xl bg-purple-600/5 border border-purple-500/10 flex items-center gap-3 text-sm text-neutral-400">
+            <Clock size={16} className="text-purple-400 flex-shrink-0" />
+            <span>This replay will be publicly available for <strong className="text-white">{replayTimeLeft}</strong> more. After that, it will be removed.</span>
+          </div>
+        </motion.div>
+      </div>
+    </div>
   );
 }
 
@@ -1223,6 +1485,21 @@ function RoomView({ user, roomId }: { user: User; roomId: string }) {
     try { if (navigator.vibrate) navigator.vibrate(50); await addDoc(collection(db, 'rooms', ROOM_ID, 'reactions'), { roomId: ROOM_ID, userId: user.uid, emoji, timestamp: Date.now() }); } catch {}
   };
 
+  const endParty = async () => {
+    if (!confirm('End this watch party? A public replay will be available for 72 hours.')) return;
+    try {
+      // Find event linked to this room
+      const eventsSnap = await getDocs(query(collection(db, 'events'), where('roomId', '==', ROOM_ID)));
+      for (const eventDoc of eventsSnap.docs) {
+        await setDoc(doc(db, 'events', eventDoc.id), { status: 'ended', endedAt: Date.now() }, { merge: true });
+        navigate(`event/${eventDoc.id}`);
+        return;
+      }
+      // No event found, just go home
+      navigate('home');
+    } catch { setError('Failed to end party.'); }
+  };
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="min-h-screen flex flex-col lg:flex-row overflow-hidden bg-neutral-950 text-white">
       <main className="flex-1 flex flex-col relative min-h-0">
@@ -1241,6 +1518,11 @@ function RoomView({ user, roomId }: { user: User; roomId: string }) {
             <button onClick={copyLink} className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/30 transition-colors text-xs font-medium">
               {copied ? <><Copy size={12} /> Copied!</> : <><Share2 size={12} /> Share Room</>}
             </button>
+            {isHost && (
+              <button onClick={endParty} className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-600/20 border border-red-500/30 text-red-400 hover:bg-red-600/30 transition-colors text-xs font-medium">
+                <StopCircle size={12} /> End Party
+              </button>
+            )}
             <button onClick={() => navigate('events')} className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white transition-colors text-xs font-medium"><Calendar size={12} /> Events</button>
             <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-xs">
               <Users size={13} className="text-neutral-500" /> {onlineUsers.length}
