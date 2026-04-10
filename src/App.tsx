@@ -4,39 +4,44 @@
  */
 
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { 
-  auth, 
-  db, 
-  googleProvider, 
-  signInWithPopup, 
-  onAuthStateChanged, 
-  doc, 
-  collection, 
-  onSnapshot, 
-  setDoc, 
-  addDoc, 
-  query, 
-  orderBy, 
-  limit, 
+import {
+  auth,
+  db,
+  googleProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signInAnonymously,
+  onAuthStateChanged,
+  doc,
+  collection,
+  onSnapshot,
+  setDoc,
+  addDoc,
+  query,
+  orderBy,
+  limit,
   serverTimestamp,
-  User 
+  User
 } from './firebase';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Play, 
-  Pause, 
-  Send, 
-  Smile, 
-  Users, 
-  Video, 
-  Upload, 
+import {
+  Play,
+  Pause,
+  Send,
+  Smile,
+  Users,
+  Video,
+  Upload,
   LogOut,
   ChevronRight,
   Heart,
   ThumbsUp,
   Laugh,
   Angry,
-  Zap
+  Zap,
+  Loader
 } from 'lucide-react';
 import { cn } from './lib/utils';
 
@@ -97,7 +102,11 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [videoLoading, setVideoLoading] = useState(false);
+  const [signInLoading, setSignInLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [reactions, setReactions] = useState<Reaction[]>([]);
@@ -296,10 +305,125 @@ export default function App() {
   const handleLogin = async () => {
     try {
       setError(null);
+      setSignInLoading(true);
       await signInWithPopup(auth, googleProvider);
+      setSignInLoading(false);
     } catch (error) {
       console.error('Login failed:', error);
-      setError('Failed to sign in. Please try again.');
+      setSignInLoading(false);
+      if (error instanceof Error && 'code' in error) {
+        const authError = error as { code: string; message: string };
+        switch (authError.code) {
+          case 'auth/popup-blocked':
+            setError('Sign-in popup was blocked by your browser. Please allow popups and try again.');
+            break;
+          case 'auth/cancelled-popup-request':
+            setError('Sign-in was cancelled.');
+            break;
+          case 'auth/popup-closed-by-user':
+            setError('Sign-in popup was closed before completing.');
+            break;
+          case 'auth/network-request-failed':
+            setError('Network error occurred. Please check your connection and try again.');
+            break;
+          default:
+            setError('Failed to sign in. Please try again.');
+        }
+      } else {
+        setError('An unexpected error occurred. Please try again.');
+      }
+    }
+  };
+
+  const handleEmailAuth = async (isSignUp: boolean) => {
+    if (!email || !password) {
+      setError('Please enter both email and password.');
+      return;
+    }
+    try {
+      setError(null);
+      setSignInLoading(true);
+      if (isSignUp) {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+      setSignInLoading(false);
+    } catch (error) {
+      console.error('Email auth failed:', error);
+      setSignInLoading(false);
+      if (error instanceof Error && 'code' in error) {
+        const authError = error as { code: string; message: string };
+        switch (authError.code) {
+          case 'auth/invalid-email':
+            setError('Invalid email address.');
+            break;
+          case 'auth/user-disabled':
+            setError('This account has been disabled.');
+            break;
+          case 'auth/user-not-found':
+            setError('No account found with this email.');
+            break;
+          case 'auth/wrong-password':
+            setError('Incorrect password.');
+            break;
+          case 'auth/email-already-in-use':
+            setError('An account with this email already exists.');
+            break;
+          case 'auth/weak-password':
+            setError('Password should be at least 6 characters.');
+            break;
+          case 'auth/network-request-failed':
+            setError('Network error occurred. Please check your connection and try again.');
+            break;
+          default:
+            setError(isSignUp ? 'Failed to create account. Please try again.' : 'Failed to sign in. Please try again.');
+        }
+      } else {
+        setError('An unexpected error occurred. Please try again.');
+      }
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!email) {
+      setError('Please enter your email address.');
+      return;
+    }
+    try {
+      setError(null);
+      await sendPasswordResetEmail(auth, email);
+      setError('Password reset email sent. Check your inbox.');
+    } catch (error) {
+      console.error('Password reset failed:', error);
+      if (error instanceof Error && 'code' in error) {
+        const authError = error as { code: string; message: string };
+        switch (authError.code) {
+          case 'auth/invalid-email':
+            setError('Invalid email address.');
+            break;
+          case 'auth/user-not-found':
+            setError('No account found with this email.');
+            break;
+          default:
+            setError('Failed to send password reset email. Please try again.');
+        }
+      } else {
+        setError('An unexpected error occurred. Please try again.');
+      }
+    }
+  };
+
+  const handleAnonymousSignIn = async () => {
+    try {
+      setError(null);
+      setSignInLoading(true);
+      await signInAnonymously(auth);
+      setSignInLoading(false);
+    } catch (error) {
+      console.error('Anonymous sign-in failed:', error);
+      setSignInLoading(false);
+      setError('Failed to sign in anonymously. Please try again.');
     }
   };
   const handleLogout = () => auth.signOut();
@@ -488,27 +612,145 @@ export default function App() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.5 }}
-            whileHover={{ scale: 1.02, y: -2 }}
-            whileTap={{ scale: 0.98 }}
+            whileHover={!signInLoading ? { scale: 1.02, y: -2 } : {}}
+            whileTap={!signInLoading ? { scale: 0.98 } : {}}
             onClick={handleLogin}
-            className="w-full py-4 px-6 bg-gradient-to-r from-white to-neutral-200 text-black font-semibold rounded-xl hover:shadow-xl hover:shadow-white/20 transition-all duration-200 flex items-center justify-center gap-3 group"
+            disabled={signInLoading}
+            className="w-full py-4 px-6 bg-gradient-to-r from-white to-neutral-200 text-black font-semibold rounded-xl hover:shadow-xl hover:shadow-white/20 transition-all duration-200 flex items-center justify-center gap-3 group disabled:opacity-70 disabled:cursor-not-allowed"
           >
-            <motion.img
-              src="https://www.google.com/favicon.ico"
-              className="w-5 h-5"
-              alt="Google"
-              whileHover={{ rotate: 360 }}
-              transition={{ duration: 0.5 }}
-            />
-            <span>Sign in with Google</span>
-            <motion.div
-              className="opacity-0 group-hover:opacity-100 transition-opacity"
-              initial={false}
-              animate={{ x: [0, 5, 0] }}
-              transition={{ duration: 1, repeat: Infinity }}
+            {signInLoading ? (
+              <>
+                <Loader className="w-5 h-5 animate-spin" />
+                <span>Signing in...</span>
+              </>
+            ) : (
+              <>
+                <motion.img
+                  src="https://www.google.com/favicon.ico"
+                  className="w-5 h-5"
+                  alt="Google"
+                  whileHover={{ rotate: 360 }}
+                  transition={{ duration: 0.5 }}
+                />
+                <span>Sign in with Google</span>
+                <motion.div
+                  className="opacity-0 group-hover:opacity-100 transition-opacity"
+                  initial={false}
+                  animate={{ x: [0, 5, 0] }}
+                  transition={{ duration: 1, repeat: Infinity }}
+                >
+                  →
+                </motion.div>
+              </>
+            )}
+          </motion.button>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.6 }}
+            className="flex items-center w-full my-6"
+          >
+            <div className="flex-1 h-px bg-neutral-600"></div>
+            <span className="px-4 text-neutral-400 text-sm">or</span>
+            <div className="flex-1 h-px bg-neutral-600"></div>
+          </motion.div>
+
+          <motion.form
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.7 }}
+            onSubmit={(e) => { e.preventDefault(); handleEmailAuth(isSignUp); }}
+            className="space-y-4"
+          >
+            <div>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email"
+                className="w-full px-4 py-3 bg-neutral-800 border border-neutral-600 rounded-lg text-white placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
+                className="w-full px-4 py-3 bg-neutral-800 border border-neutral-600 rounded-lg text-white placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                required
+              />
+              {!isSignUp && (
+                <div className="text-right">
+                  <button
+                    type="button"
+                    onClick={handlePasswordReset}
+                    className="text-sm text-indigo-400 hover:text-indigo-300 underline"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
+            </div>
+            <motion.button
+              type="submit"
+              disabled={signInLoading}
+              className="w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors duration-200 disabled:opacity-70 disabled:cursor-not-allowed"
             >
-              →
-            </motion.div>
+              {signInLoading ? 'Processing...' : (isSignUp ? 'Sign Up' : 'Sign In')}
+            </motion.button>
+          </motion.form>
+
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.8 }}
+            className="text-center text-sm text-neutral-400"
+          >
+            {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
+            <button
+              type="button"
+              onClick={() => setIsSignUp(!isSignUp)}
+              className="text-indigo-400 hover:text-indigo-300 underline"
+            >
+              {isSignUp ? 'Sign In' : 'Sign Up'}
+            </button>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.9 }}
+            className="flex items-center w-full my-6"
+          >
+            <div className="flex-1 h-px bg-neutral-600"></div>
+            <span className="px-4 text-neutral-400 text-sm">or</span>
+            <div className="flex-1 h-px bg-neutral-600"></div>
+          </motion.div>
+
+          <motion.button
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 1.0 }}
+            whileHover={!signInLoading ? { scale: 1.02, y: -2 } : {}}
+            whileTap={!signInLoading ? { scale: 0.98 } : {}}
+            onClick={handleAnonymousSignIn}
+            disabled={signInLoading}
+            className="w-full py-3 px-6 bg-neutral-700 hover:bg-neutral-600 text-white font-semibold rounded-lg transition-colors duration-200 disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+          >
+            {signInLoading ? (
+              <>
+                <Loader className="w-5 h-5 animate-spin" />
+                <span>Signing in...</span>
+              </>
+            ) : (
+              <>
+                <Users size={20} />
+                <span>Continue as Guest</span>
+              </>
+            )}
           </motion.button>
 
           <motion.div
