@@ -483,9 +483,19 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white flex flex-col lg:flex-row overflow-hidden">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+      className="min-h-screen bg-neutral-950 text-white flex flex-col lg:flex-row overflow-hidden"
+    >
       {/* Main Content: Video Player */}
-      <main className="flex-1 flex flex-col relative min-h-0">
+      <motion.main
+        initial={{ x: -20, opacity: 0 }}
+        animate={{ x: 0, opacity: 1 }}
+        transition={{ duration: 0.6, delay: 0.1 }}
+        className="flex-1 flex flex-col relative min-h-0"
+      >
         {/* Header */}
         <header className="p-4 border-b border-neutral-800 flex items-center justify-between bg-neutral-950/50 backdrop-blur-md z-10">
           <div className="flex items-center gap-3">
@@ -779,7 +789,7 @@ export default function App() {
           <ChatInput onSend={sendMessage} />
         </div>
       </aside>
-    </div>
+    </motion.div>
   );
 }
 
