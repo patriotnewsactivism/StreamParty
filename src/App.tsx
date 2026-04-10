@@ -97,6 +97,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [videoLoading, setVideoLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [reactions, setReactions] = useState<Reaction[]>([]);
@@ -122,51 +123,63 @@ export default function App() {
 
     const roomRef = doc(db, 'rooms', ROOM_ID);
     return onSnapshot(roomRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data() as RoomState;
-        const wasHost = isHost;
-        const newIsHost = data.hostId === user.uid;
+      try {
+        if (snapshot.exists()) {
+          const data = snapshot.data() as RoomState;
+          const wasHost = isHost;
+          const newIsHost = data.hostId === user.uid;
 
-        setRoomState(data);
-        setIsHost(newIsHost);
+          setRoomState(data);
+          setIsHost(newIsHost);
+          setError(null); // Clear any previous errors
 
-        // Sync local video player with improved logic
-        if (videoRef.current && !syncIgnoreRef.current) {
-          const video = videoRef.current;
-          const timeDiff = Math.abs(video.currentTime - data.currentTime);
-          const timeSinceUpdate = Date.now() - data.lastUpdated;
+          // Sync local video player with improved logic
+          if (videoRef.current && !syncIgnoreRef.current) {
+            const video = videoRef.current;
+            const timeDiff = Math.abs(video.currentTime - data.currentTime);
+            const timeSinceUpdate = Date.now() - data.lastUpdated;
 
-          // Only sync if we're not the host or if the update is recent (< 5 seconds)
-          if (!newIsHost || timeSinceUpdate < 5000) {
-            // If we're significantly out of sync (more than 1 second) or status changed
-            if (timeDiff > 1 || (data.status === 'playing' && video.paused) || (data.status === 'paused' && !video.paused)) {
-              // Use a timeout to prevent rapid syncs that could cause stuttering
-              setTimeout(() => {
-                if (video && !syncIgnoreRef.current) {
-                  video.currentTime = data.currentTime;
-                  if (data.status === 'playing') {
-                    video.play().catch(() => {
-                      // Handle autoplay restrictions gracefully
-                      console.log('Autoplay prevented, waiting for user interaction');
-                    });
-                  } else {
-                    video.pause();
+            // Only sync if we're not the host or if the update is recent (< 5 seconds)
+            if (!newIsHost || timeSinceUpdate < 5000) {
+              // If we're significantly out of sync (more than 1 second) or status changed
+              if (timeDiff > 1 || (data.status === 'playing' && video.paused) || (data.status === 'paused' && !video.paused)) {
+                // Use a timeout to prevent rapid syncs that could cause stuttering
+                setTimeout(() => {
+                  if (video && !syncIgnoreRef.current) {
+                    video.currentTime = data.currentTime;
+                    if (data.status === 'playing') {
+                      video.play().catch(() => {
+                        // Handle autoplay restrictions gracefully
+                        console.log('Autoplay prevented, waiting for user interaction');
+                      });
+                    } else {
+                      video.pause();
+                    }
                   }
-                }
-              }, 100); // Small delay to batch rapid updates
+                }, 100); // Small delay to batch rapid updates
+              }
             }
           }
+        } else {
+          // Initialize room if it doesn't exist with better default state
+          setDoc(roomRef, {
+            videoUrl: DEFAULT_VIDEOS[0].url,
+            status: 'paused',
+            currentTime: 0,
+            lastUpdated: Date.now(),
+            hostId: user.uid
+          }).catch(error => {
+            console.error('Failed to initialize room:', error);
+            setError('Failed to initialize room. Please refresh the page.');
+          });
         }
-      } else {
-        // Initialize room if it doesn't exist with better default state
-        setDoc(roomRef, {
-          videoUrl: DEFAULT_VIDEOS[0].url,
-          status: 'paused',
-          currentTime: 0,
-          lastUpdated: Date.now(),
-          hostId: user.uid
-        });
+      } catch (error) {
+        console.error('Error syncing room state:', error);
+        setError('Failed to sync with room. Please refresh the page.');
       }
+    }, (error) => {
+      console.error('Room sync error:', error);
+      setError('Lost connection to room. Please refresh the page.');
     });
   }, [user, isHost]);
 
@@ -280,7 +293,15 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isHost, user, roomState?.status, roomState?.currentTime]);
 
-  const handleLogin = () => signInWithPopup(auth, googleProvider);
+  const handleLogin = async () => {
+    try {
+      setError(null);
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error('Login failed:', error);
+      setError('Failed to sign in. Please try again.');
+    }
+  };
   const handleLogout = () => auth.signOut();
 
   const updateRoomState = async (updates: Partial<RoomState>) => {
@@ -360,12 +381,32 @@ export default function App() {
 
   const sendReaction = async (emoji: string) => {
     if (!user) return;
-    await addDoc(collection(db, 'rooms', ROOM_ID, 'reactions'), {
-      roomId: ROOM_ID,
-      userId: user.uid,
-      emoji,
-      timestamp: Date.now()
-    });
+
+    try {
+      // Add haptic feedback with animation
+      if (navigator.vibrate) {
+        navigator.vibrate(50);
+      }
+
+      await addDoc(collection(db, 'rooms', ROOM_ID, 'reactions'), {
+        roomId: ROOM_ID,
+        userId: user.uid,
+        emoji,
+        timestamp: Date.now()
+      });
+
+      // Visual feedback - flash the reaction button
+      const button = document.querySelector(`[data-emoji="${emoji}"]`);
+      if (button) {
+        button.classList.add('animate-pulse', 'scale-110');
+        setTimeout(() => {
+          button.classList.remove('animate-pulse', 'scale-110');
+        }, 300);
+      }
+    } catch (error) {
+      console.error('Failed to send reaction:', error);
+      setError('Failed to send reaction. Please try again.');
+    }
   };
 
   if (loading) {
@@ -520,7 +561,24 @@ export default function App() {
               <Users size={14} className="text-neutral-500" />
               <span className="text-xs font-medium">{onlineUsers.length} Online</span>
             </div>
-            <button 
+            {/* Mobile Chat Toggle */}
+            <button
+              onClick={() => setShowChat(!showChat)}
+              className="lg:hidden p-2 text-neutral-500 hover:text-white transition-colors relative"
+              title="Toggle Chat"
+            >
+              <motion.div
+                animate={{ rotate: showChat ? 180 : 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <ChevronRight size={20} />
+              </motion.div>
+              {onlineUsers.length > 0 && (
+                <div className="absolute -top-1 -right-1 w-2 h-2 bg-indigo-500 rounded-full animate-pulse" />
+              )}
+            </button>
+
+            <button
               onClick={handleLogout}
               className="p-2 text-neutral-500 hover:text-white transition-colors"
               title="Logout"
@@ -529,6 +587,24 @@ export default function App() {
             </button>
           </div>
         </header>
+
+        {/* Error Banner */}
+        {error && (
+          <motion.div
+            initial={{ y: -100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -100, opacity: 0 }}
+            className="bg-red-600/90 backdrop-blur-sm text-white px-4 py-2 text-sm font-medium flex items-center justify-between"
+          >
+            <span>{error}</span>
+            <button
+              onClick={() => setError(null)}
+              className="ml-4 text-red-200 hover:text-white"
+            >
+              ✕
+            </button>
+          </motion.div>
+        )}
 
         {/* Video Area */}
         <div className="flex-1 bg-black relative group flex items-center justify-center overflow-hidden">
@@ -625,6 +701,25 @@ export default function App() {
                 <FloatingEmoji key={r.id} emoji={r.emoji} />
               ))}
             </AnimatePresence>
+
+            {/* Reaction Activity Indicator */}
+            {reactions.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                className="absolute top-4 left-4 bg-black/60 backdrop-blur-sm rounded-full px-3 py-1 text-xs text-white flex items-center gap-2"
+              >
+                <div className="flex gap-1">
+                  {[...new Set(reactions.slice(-3).map(r => r.emoji))].map((emoji, i) => (
+                    <span key={i} className="animate-bounce" style={{ animationDelay: `${i * 0.1}s` }}>
+                      {emoji}
+                    </span>
+                  ))}
+                </div>
+                <span className="text-neutral-300">Active</span>
+              </motion.div>
+            )}
           </div>
 
           {/* Host Status Overlay */}
@@ -726,10 +821,33 @@ export default function App() {
             </motion.div>
           </div>
         </div>
-      </main>
+      </motion.main>
+
+      {/* Mobile Chat Overlay */}
+      {showChat && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={() => setShowChat(false)}
+        />
+      )}
 
       {/* Sidebar: Chat & Reactions */}
-      <aside className="w-full lg:w-96 border-l border-neutral-800 flex flex-col bg-neutral-950">
+      <motion.aside
+        initial={{ x: 20, opacity: 0 }}
+        animate={{
+          x: showChat ? 0 : "100%",
+          opacity: showChat ? 1 : 0
+        }}
+        transition={{ duration: 0.3 }}
+        className={cn(
+          "fixed lg:relative top-0 right-0 z-50 w-full lg:w-96 h-full lg:h-auto",
+          "border-l border-neutral-800 flex flex-col bg-neutral-950",
+          "lg:translate-x-0 lg:opacity-100"
+        )}
+      >
         {/* Reactions Bar */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -747,6 +865,7 @@ export default function App() {
                 whileHover={{ scale: 1.1, y: -2 }}
                 whileTap={{ scale: 0.9 }}
                 onClick={() => sendReaction(emoji.label)}
+                data-emoji={emoji.label}
                 className="p-3 rounded-full hover:bg-neutral-900 transition-all duration-200 group relative"
               >
                 <emoji.icon className={cn("w-6 h-6 transition-all duration-200", emoji.color)} />
@@ -844,7 +963,7 @@ export default function App() {
         <div className="p-4 border-t border-neutral-800 bg-neutral-900/20">
           <ChatInput onSend={sendMessage} />
         </div>
-      </aside>
+      </motion.aside>
     </motion.div>
   );
 }
