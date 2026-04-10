@@ -102,6 +102,7 @@ export default function App() {
   const [reactions, setReactions] = useState<Reaction[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<UserPresence[]>([]);
   const [isHost, setIsHost] = useState(false);
+  const [showChat, setShowChat] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const syncIgnoreRef = useRef(false);
@@ -494,7 +495,10 @@ export default function App() {
         initial={{ x: -20, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ duration: 0.6, delay: 0.1 }}
-        className="flex-1 flex flex-col relative min-h-0"
+        className={cn(
+          "flex-1 flex flex-col relative min-h-0 transition-all duration-300",
+          showChat && "lg:flex-1"
+        )}
       >
         {/* Header */}
         <header className="p-4 border-b border-neutral-800 flex items-center justify-between bg-neutral-950/50 backdrop-blur-md z-10">
@@ -727,17 +731,38 @@ export default function App() {
       {/* Sidebar: Chat & Reactions */}
       <aside className="w-full lg:w-96 border-l border-neutral-800 flex flex-col bg-neutral-950">
         {/* Reactions Bar */}
-        <div className="p-4 border-b border-neutral-800 flex items-center justify-around">
-          {REACTION_EMOJIS.map((emoji) => (
-            <button
-              key={emoji.label}
-              onClick={() => sendReaction(emoji.label)}
-              className="p-2 rounded-full hover:bg-neutral-900 transition-all active:scale-90 group"
-            >
-              <emoji.icon className={cn("w-6 h-6 transition-transform group-hover:scale-110", emoji.color)} />
-            </button>
-          ))}
-        </div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="p-4 border-b border-neutral-800"
+        >
+          <div className="flex items-center justify-around">
+            {REACTION_EMOJIS.map((emoji, index) => (
+              <motion.button
+                key={emoji.label}
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ delay: 0.3 + index * 0.1, type: "spring", stiffness: 200 }}
+                whileHover={{ scale: 1.1, y: -2 }}
+                whileTap={{ scale: 0.9 }}
+                onClick={() => sendReaction(emoji.label)}
+                className="p-3 rounded-full hover:bg-neutral-900 transition-all duration-200 group relative"
+              >
+                <emoji.icon className={cn("w-6 h-6 transition-all duration-200", emoji.color)} />
+
+                {/* Ripple effect on click */}
+                <div className="absolute inset-0 rounded-full bg-white/10 scale-0 group-active:scale-100 transition-transform duration-200" />
+
+                {/* Tooltip */}
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-neutral-900 text-xs text-white rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
+                  {emoji.label}
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-neutral-900" />
+                </div>
+              </motion.button>
+            ))}
+          </div>
+        </motion.div>
 
         {/* Chat Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-hide">
@@ -894,23 +919,45 @@ function ChatInput({ onSend }: { onSend: (text: string) => void }) {
 
 function FloatingEmoji({ emoji }: any) {
   const randomX = useMemo(() => Math.random() * 80 + 10, []); // 10% to 90%
-  const randomDuration = useMemo(() => 2 + Math.random() * 2, []);
-  const randomScale = useMemo(() => 0.8 + Math.random() * 0.5, []);
+  const randomDuration = useMemo(() => 3 + Math.random() * 2, []);
+  const randomScale = useMemo(() => 0.6 + Math.random() * 0.8, []);
+  const randomRotation = useMemo(() => Math.random() * 60 - 30, []); // -30 to 30 degrees
 
   return (
     <motion.div
-      initial={{ y: '100%', x: `${randomX}%`, opacity: 0, scale: 0 }}
-      animate={{ 
-        y: '-10%', 
-        opacity: [0, 1, 1, 0],
-        scale: randomScale,
-        x: [`${randomX}%`, `${randomX + (Math.random() * 20 - 10)}%`]
+      initial={{ y: '100%', x: `${randomX}%`, opacity: 0, scale: 0, rotate: 0 }}
+      animate={{
+        y: '-20%',
+        opacity: [0, 1, 1, 0.8, 0],
+        scale: [0, randomScale, randomScale * 1.2, randomScale],
+        rotate: [0, randomRotation, randomRotation * 0.5, 0],
+        x: [`${randomX}%`, `${randomX + (Math.random() * 30 - 15)}%`]
       }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: randomDuration, ease: "easeOut" }}
-      className="absolute bottom-0 text-3xl select-none pointer-events-none z-50"
+      exit={{ opacity: 0, scale: 0 }}
+      transition={{
+        duration: randomDuration,
+        ease: [0.25, 0.46, 0.45, 0.94], // Custom easing for more natural movement
+        times: [0, 0.2, 0.8, 1]
+      }}
+      className="absolute bottom-0 text-4xl select-none pointer-events-none z-50 drop-shadow-lg"
+      style={{
+        filter: 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3))',
+        textShadow: '0 2px 4px rgba(0, 0, 0, 0.5)'
+      }}
     >
-      {emoji}
+      <motion.span
+        animate={{
+          scale: [1, 1.1, 1],
+          rotate: [0, 5, -5, 0]
+        }}
+        transition={{
+          duration: 0.8,
+          repeat: Infinity,
+          repeatDelay: Math.random() * 2
+        }}
+      >
+        {emoji}
+      </motion.span>
     </motion.div>
   );
 }
