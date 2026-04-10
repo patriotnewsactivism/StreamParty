@@ -56,6 +56,7 @@ interface ChatMessage {
   userName: string;
   text: string;
   timestamp: number;
+  status?: 'sending' | 'sent' | 'delivered';
 }
 
 interface Reaction {
@@ -95,6 +96,7 @@ const ROOM_ID = 'main-party';
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [videoLoading, setVideoLoading] = useState(false);
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [reactions, setReactions] = useState<Reaction[]>([]);
@@ -322,13 +324,37 @@ export default function App() {
 
   const sendMessage = async (text: string) => {
     if (!user || !text.trim()) return;
-    await addDoc(collection(db, 'rooms', ROOM_ID, 'messages'), {
-      roomId: ROOM_ID,
+
+    const tempMessage: ChatMessage = {
+      id: `temp-${Date.now()}`,
       userId: user.uid,
       userName: user.displayName || 'Anonymous',
       text,
-      timestamp: Date.now()
-    });
+      timestamp: Date.now(),
+      status: 'sending'
+    };
+
+    // Optimistically add message to UI
+    setMessages(prev => [...prev, tempMessage]);
+
+    try {
+      await addDoc(collection(db, 'rooms', ROOM_ID, 'messages'), {
+        roomId: ROOM_ID,
+        userId: user.uid,
+        userName: user.displayName || 'Anonymous',
+        text,
+        timestamp: Date.now()
+      });
+
+      // Update status to sent
+      setMessages(prev => prev.map(msg =>
+        msg.id === tempMessage.id ? { ...msg, status: 'sent' as const } : msg
+      ));
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      // Remove failed message
+      setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
+    }
   };
 
   const sendReaction = async (emoji: string) => {
@@ -351,26 +377,106 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-neutral-950 flex flex-col items-center justify-center p-6 text-center">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full space-y-8"
+      <div className="min-h-screen bg-gradient-to-br from-neutral-950 via-neutral-900 to-neutral-950 flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
+        {/* Animated background elements */}
+        <div className="absolute inset-0">
+          {[...Array(20)].map((_, i) => (
+            <motion.div
+              key={i}
+              className="absolute w-1 h-1 bg-indigo-500/20 rounded-full"
+              initial={{
+                x: Math.random() * window.innerWidth,
+                y: Math.random() * window.innerHeight,
+                scale: 0
+              }}
+              animate={{
+                scale: [0, 1, 0],
+                opacity: [0, 0.5, 0]
+              }}
+              transition={{
+                duration: 3,
+                delay: Math.random() * 2,
+                repeat: Infinity,
+                repeatDelay: Math.random() * 3
+              }}
+              style={{
+                left: `${Math.random() * 100}%`,
+                top: `${Math.random() * 100}%`
+              }}
+            />
+          ))}
+        </div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 30, scale: 0.9 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+          className="max-w-md w-full space-y-8 relative z-10"
         >
-          <div className="space-y-2">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-600/20 text-indigo-500 mb-4">
-              <Video size={32} />
-            </div>
-            <h1 className="text-4xl font-bold tracking-tight text-white font-sans">StreamParty</h1>
-            <p className="text-neutral-400">Watch videos together in real-time with friends.</p>
+          <div className="space-y-4">
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ delay: 0.2, type: "spring", stiffness: 200 }}
+              className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-indigo-600 to-purple-600 text-white mb-6 shadow-2xl shadow-indigo-500/25"
+            >
+              <Video size={36} />
+            </motion.div>
+
+            <motion.h1
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+              className="text-5xl font-bold tracking-tight text-white font-sans bg-gradient-to-r from-white to-neutral-300 bg-clip-text text-transparent"
+            >
+              StreamParty
+            </motion.h1>
+
+            <motion.p
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4 }}
+              className="text-neutral-400 text-lg"
+            >
+              Watch videos together in real-time with friends.
+            </motion.p>
           </div>
-          <button
+
+          <motion.button
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5 }}
+            whileHover={{ scale: 1.02, y: -2 }}
+            whileTap={{ scale: 0.98 }}
             onClick={handleLogin}
-            className="w-full py-4 px-6 bg-white text-black font-semibold rounded-xl hover:bg-neutral-200 transition-colors flex items-center justify-center gap-3"
+            className="w-full py-4 px-6 bg-gradient-to-r from-white to-neutral-200 text-black font-semibold rounded-xl hover:shadow-xl hover:shadow-white/20 transition-all duration-200 flex items-center justify-center gap-3 group"
           >
-            <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-            Sign in with Google
-          </button>
+            <motion.img
+              src="https://www.google.com/favicon.ico"
+              className="w-5 h-5"
+              alt="Google"
+              whileHover={{ rotate: 360 }}
+              transition={{ duration: 0.5 }}
+            />
+            <span>Sign in with Google</span>
+            <motion.div
+              className="opacity-0 group-hover:opacity-100 transition-opacity"
+              initial={false}
+              animate={{ x: [0, 5, 0] }}
+              transition={{ duration: 1, repeat: Infinity }}
+            >
+              →
+            </motion.div>
+          </motion.button>
+
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.7 }}
+            className="text-xs text-neutral-500 text-center"
+          >
+            Join thousands of viewers watching together
+          </motion.div>
         </motion.div>
       </div>
     );
@@ -413,26 +519,89 @@ export default function App() {
         {/* Video Area */}
         <div className="flex-1 bg-black relative group flex items-center justify-center overflow-hidden">
           {roomState?.videoUrl ? (
-            <video
-              ref={videoRef}
-              src={roomState.videoUrl}
-              className="w-full h-full object-contain"
-              onPlay={() => {
-                if (!isHost) return;
-                updateRoomState({ status: 'playing' });
-              }}
-              onPause={() => {
-                if (!isHost) return;
-                updateRoomState({ status: 'paused' });
-              }}
-              onSeeked={() => {
-                if (!isHost) return;
-                updateRoomState({ currentTime: videoRef.current?.currentTime || 0 });
-              }}
-              controls={isHost}
-            />
+            <>
+              <video
+                ref={videoRef}
+                src={roomState.videoUrl}
+                className="w-full h-full object-contain"
+                onPlay={() => {
+                  if (!isHost) return;
+                  updateRoomState({ status: 'playing' });
+                }}
+                onPause={() => {
+                  if (!isHost) return;
+                  updateRoomState({ status: 'paused' });
+                }}
+                onSeeked={() => {
+                  if (!isHost) return;
+                  updateRoomState({ currentTime: videoRef.current?.currentTime || 0 });
+                }}
+                controls={false} // We'll use custom controls
+                onLoadedData={() => setVideoLoading(false)}
+                onLoadStart={() => setVideoLoading(true)}
+              />
+
+              {/* Custom Video Controls Overlay */}
+              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                {/* Center Play/Pause Button */}
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <button
+                    onClick={handleVideoAction}
+                    className={cn(
+                      "p-4 rounded-full bg-black/60 backdrop-blur-md border border-white/20",
+                      "hover:bg-black/80 hover:border-white/40 transition-all duration-200",
+                      "transform hover:scale-110 active:scale-95",
+                      isHost ? "cursor-pointer" : "cursor-not-allowed opacity-50"
+                    )}
+                    disabled={!isHost}
+                  >
+                    {roomState?.status === 'playing' ? (
+                      <Pause size={32} className="text-white" />
+                    ) : (
+                      <Play size={32} className="text-white ml-1" />
+                    )}
+                  </button>
+                </div>
+
+                {/* Bottom Controls Bar */}
+                <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent">
+                  <div className="flex items-center gap-4 text-white">
+                    {/* Progress Bar */}
+                    <div className="flex-1 relative">
+                      <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-500 transition-all duration-200"
+                          style={{
+                            width: videoRef.current ? `${(videoRef.current.currentTime / videoRef.current.duration) * 100}%` : '0%'
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Time Display */}
+                    <div className="text-xs font-mono text-neutral-300">
+                      {videoRef.current ? (
+                        <>
+                          {Math.floor(videoRef.current.currentTime / 60)}:{(videoRef.current.currentTime % 60).toFixed(0).padStart(2, '0')} / {' '}
+                          {Math.floor((videoRef.current.duration || 0) / 60)}:{((videoRef.current.duration || 0) % 60).toFixed(0).padStart(2, '0')}
+                        </>
+                      ) : (
+                        '0:00 / 0:00'
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
           ) : (
             <div className="text-neutral-700 font-mono text-sm">NO VIDEO SELECTED</div>
+          )}
+
+          {/* Loading Overlay */}
+          {videoLoading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+              <div className="animate-spin rounded-full h-12 w-12 border-2 border-indigo-500 border-t-transparent"></div>
+            </div>
           )}
 
           {/* Reaction Overlay */}
@@ -444,11 +613,18 @@ export default function App() {
             </AnimatePresence>
           </div>
 
-          {/* Host Controls Overlay (if not using native controls) */}
+          {/* Host Status Overlay */}
           {!isHost && roomState && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-xs font-medium flex items-center gap-2">
-              <Users size={12} className="text-indigo-400" />
-              Watching with {roomState.hostId === user.uid ? 'you' : 'Host'}
+            <div className="absolute top-6 left-6 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-xs font-medium flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              Watching with Host
+            </div>
+          )}
+
+          {/* Host Controls Hint */}
+          {isHost && roomState?.status === 'paused' && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-indigo-600/80 backdrop-blur-md text-xs font-medium text-white animate-pulse">
+              Click play to start watching together
             </div>
           )}
         </div>
@@ -523,29 +699,78 @@ export default function App() {
         </div>
 
         {/* Chat Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-hide">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-neutral-600 space-y-2">
-              <Smile size={32} strokeWidth={1} />
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ delay: 0.2 }}
+              >
+                <Smile size={32} strokeWidth={1} />
+              </motion.div>
               <p className="text-xs font-mono">NO MESSAGES YET</p>
+              <p className="text-xs text-neutral-500">Start the conversation!</p>
             </div>
           ) : (
-            messages.map((m) => (
-              <div key={m.id} className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <span className={cn(
-                    "text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider",
-                    m.userId === user.uid ? "bg-indigo-600/20 text-indigo-400" : "bg-neutral-800 text-neutral-400"
+            messages.map((m, index) => {
+              const isOwnMessage = m.userId === user.uid;
+              return (
+                <motion.div
+                  key={m.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.05 }}
+                  className={cn(
+                    "flex gap-3 max-w-[85%]",
+                    isOwnMessage ? "ml-auto flex-row-reverse" : ""
+                  )}
+                >
+                  {/* Avatar */}
+                  <div className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0",
+                    isOwnMessage ? "bg-indigo-600 text-white" : "bg-neutral-700 text-neutral-300"
                   )}>
-                    {m.userName}
-                  </span>
-                  <span className="text-[9px] text-neutral-600 font-mono">
-                    {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                </div>
-                <p className="text-sm text-neutral-300 leading-relaxed">{m.text}</p>
-              </div>
-            ))
+                    {m.userName.charAt(0).toUpperCase()}
+                  </div>
+
+                  {/* Message Bubble */}
+                  <div className={cn(
+                    "flex flex-col gap-1",
+                    isOwnMessage ? "items-end" : "items-start"
+                  )}>
+                    {/* Username and time */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-neutral-400">
+                        {isOwnMessage ? 'You' : m.userName}
+                      </span>
+                      <span className="text-[9px] text-neutral-600 font-mono">
+                        {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+
+                    {/* Message text */}
+                    <div className={cn(
+                      "px-3 py-2 rounded-2xl text-sm leading-relaxed break-words",
+                      isOwnMessage
+                        ? "bg-indigo-600 text-white rounded-br-md"
+                        : "bg-neutral-800 text-neutral-200 rounded-bl-md"
+                    )}>
+                      {m.text}
+                    </div>
+
+                    {/* Message status for own messages */}
+                    {isOwnMessage && m.status && (
+                      <div className="flex items-center gap-1 text-xs text-neutral-500">
+                        {m.status === 'sending' && <div className="animate-spin rounded-full h-3 w-3 border border-current border-t-transparent" />}
+                        {m.status === 'sent' && <div className="w-1.5 h-1.5 rounded-full bg-neutral-500" />}
+                        <span className="text-[10px]">{m.status}</span>
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              );
+            })
           )}
         </div>
 
@@ -560,31 +785,69 @@ export default function App() {
 
 function ChatInput({ onSend }: { onSend: (text: string) => void }) {
   const [text, setText] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim()) return;
-    onSend(text);
+    onSend(text.trim());
     setText('');
+    setIsTyping(false);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setText(e.target.value);
+    setIsTyping(e.target.value.length > 0);
   };
 
   return (
-    <form onSubmit={handleSubmit} className="relative">
-      <input
-        type="text"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="Say something..."
-        className="w-full bg-neutral-900 border border-neutral-800 rounded-xl py-3 pl-4 pr-12 text-sm focus:outline-none focus:border-indigo-500 transition-colors placeholder:text-neutral-600"
-      />
-      <button
-        type="submit"
-        className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-indigo-500 hover:text-indigo-400 transition-colors disabled:opacity-50"
-        disabled={!text.trim()}
-      >
-        <Send size={18} />
-      </button>
-    </form>
+    <div className="space-y-2">
+      <form onSubmit={handleSubmit} className="relative">
+        <input
+          type="text"
+          value={text}
+          onChange={handleChange}
+          placeholder="Say something..."
+          className="w-full bg-neutral-900 border border-neutral-800 rounded-xl py-3 pl-4 pr-12 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 transition-all placeholder:text-neutral-600"
+          maxLength={500}
+        />
+        <button
+          type="submit"
+          className={cn(
+            "absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg transition-all duration-200",
+            text.trim()
+              ? "text-indigo-500 hover:text-indigo-400 hover:bg-indigo-500/10"
+              : "text-neutral-600 cursor-not-allowed"
+          )}
+          disabled={!text.trim()}
+        >
+          <Send size={18} />
+        </button>
+      </form>
+
+      {/* Character count */}
+      {text.length > 400 && (
+        <div className="text-xs text-neutral-500 text-right">
+          {text.length}/500
+        </div>
+      )}
+
+      {/* Typing indicator */}
+      {isTyping && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex items-center gap-2 text-xs text-neutral-500"
+        >
+          <div className="flex gap-1">
+            <div className="w-1 h-1 rounded-full bg-neutral-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+            <div className="w-1 h-1 rounded-full bg-neutral-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+            <div className="w-1 h-1 rounded-full bg-neutral-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+          Typing...
+        </motion.div>
+      )}
+    </div>
   );
 }
 
