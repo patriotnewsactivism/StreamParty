@@ -234,6 +234,15 @@ export default function App() {
     });
   }, [user, isHost, ROOM_ID]);
 
+  // Auto-claim host if current host is gone
+  useEffect(() => {
+    if (!user || !roomState || isHost) return;
+    const hostOnline = onlineUsers.some(u => u.uid === roomState.hostId);
+    if (!hostOnline && onlineUsers.length > 0) {
+      updateRoomState({ hostId: user.uid });
+    }
+  }, [user, roomState, isHost, onlineUsers]);
+
   // Handle VK video URL resolution
   useEffect(() => {
     if (!roomState?.videoUrl) {
@@ -514,34 +523,39 @@ export default function App() {
   };
 
   const handleVideoAction = () => {
-    if (!videoRef.current || !isHost) return;
+    if (!videoRef.current || !user) return;
 
     syncIgnoreRef.current = true;
     const newStatus = videoRef.current.paused ? 'playing' : 'paused';
 
+    // Anyone can control — they become the host when they do
     updateRoomState({
       status: newStatus,
       currentTime: videoRef.current.currentTime,
-      hostId: user?.uid || ''
+      hostId: user.uid
     });
 
-    // Reset sync ignore after a short delay
+    if (newStatus === 'playing') {
+      videoRef.current.play().catch(() => {});
+    } else {
+      videoRef.current.pause();
+    }
+
     setTimeout(() => {
       syncIgnoreRef.current = false;
     }, 500);
   };
 
   const handleSeek = () => {
-    if (!videoRef.current || !isHost) return;
+    if (!videoRef.current || !user) return;
 
     syncIgnoreRef.current = true;
 
     updateRoomState({
       currentTime: videoRef.current.currentTime,
-      hostId: user?.uid || ''
+      hostId: user.uid
     });
 
-    // Reset sync ignore after a short delay
     setTimeout(() => {
       syncIgnoreRef.current = false;
     }, 500);
@@ -959,15 +973,15 @@ export default function App() {
                 src={actualVideoUrl}
                 className="w-full h-full object-contain"
                 onPlay={() => {
-                  if (!isHost) return;
+                  if (syncIgnoreRef.current || !isHost) return;
                   updateRoomState({ status: 'playing' });
                 }}
                 onPause={() => {
-                  if (!isHost) return;
+                  if (syncIgnoreRef.current || !isHost) return;
                   updateRoomState({ status: 'paused' });
                 }}
                 onSeeked={() => {
-                  if (!isHost) return;
+                  if (syncIgnoreRef.current || !isHost) return;
                   updateRoomState({ currentTime: videoRef.current?.currentTime || 0 });
                 }}
                 controls={false} // We'll use custom controls
@@ -984,10 +998,8 @@ export default function App() {
                     className={cn(
                       "p-4 rounded-full bg-black/60 backdrop-blur-md border border-white/20",
                       "hover:bg-black/80 hover:border-white/40 transition-all duration-200",
-                      "transform hover:scale-110 active:scale-95",
-                      isHost ? "cursor-pointer" : "cursor-not-allowed opacity-50"
+                      "transform hover:scale-110 active:scale-95 cursor-pointer"
                     )}
-                    disabled={!isHost}
                   >
                     {roomState?.status === 'playing' ? (
                       <Pause size={32} className="text-white" />
@@ -1074,10 +1086,10 @@ export default function App() {
             </div>
           )}
 
-          {/* Host Controls Hint */}
-          {isHost && roomState?.status === 'paused' && (
+          {/* Play Hint */}
+          {roomState?.status === 'paused' && actualVideoUrl && (
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-indigo-600/80 backdrop-blur-md text-xs font-medium text-white animate-pulse">
-              Click play to start watching together
+              Hover &amp; click play to start watching together
             </div>
           )}
         </div>
