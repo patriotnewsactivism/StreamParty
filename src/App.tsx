@@ -65,6 +65,13 @@ interface Reaction {
   timestamp: number;
 }
 
+interface UserPresence {
+  uid: string;
+  displayName: string;
+  lastSeen: number;
+  isOnline: boolean;
+}
+
 // --- Constants ---
 
 const DEFAULT_VIDEOS = [
@@ -91,10 +98,12 @@ export default function App() {
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [reactions, setReactions] = useState<Reaction[]>([]);
+  const [onlineUsers, setOnlineUsers] = useState<UserPresence[]>([]);
   const [isHost, setIsHost] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const syncIgnoreRef = useRef(false);
+  const presenceRef = useRef<any>(null);
 
   // Auth
   useEffect(() => {
@@ -112,25 +121,41 @@ export default function App() {
     return onSnapshot(roomRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data() as RoomState;
-        setRoomState(data);
-        setIsHost(data.hostId === user.uid);
+        const wasHost = isHost;
+        const newIsHost = data.hostId === user.uid;
 
-        // Sync local video player
+        setRoomState(data);
+        setIsHost(newIsHost);
+
+        // Sync local video player with improved logic
         if (videoRef.current && !syncIgnoreRef.current) {
-          const timeDiff = Math.abs(videoRef.current.currentTime - data.currentTime);
-          
-          // If we are significantly out of sync or status changed
-          if (timeDiff > 2 || (data.status === 'playing' && videoRef.current.paused) || (data.status === 'paused' && !videoRef.current.paused)) {
-            videoRef.current.currentTime = data.currentTime;
-            if (data.status === 'playing') {
-              videoRef.current.play().catch(() => {});
-            } else {
-              videoRef.current.pause();
+          const video = videoRef.current;
+          const timeDiff = Math.abs(video.currentTime - data.currentTime);
+          const timeSinceUpdate = Date.now() - data.lastUpdated;
+
+          // Only sync if we're not the host or if the update is recent (< 5 seconds)
+          if (!newIsHost || timeSinceUpdate < 5000) {
+            // If we're significantly out of sync (more than 1 second) or status changed
+            if (timeDiff > 1 || (data.status === 'playing' && video.paused) || (data.status === 'paused' && !video.paused)) {
+              // Use a timeout to prevent rapid syncs that could cause stuttering
+              setTimeout(() => {
+                if (video && !syncIgnoreRef.current) {
+                  video.currentTime = data.currentTime;
+                  if (data.status === 'playing') {
+                    video.play().catch(() => {
+                      // Handle autoplay restrictions gracefully
+                      console.log('Autoplay prevented, waiting for user interaction');
+                    });
+                  } else {
+                    video.pause();
+                  }
+                }
+              }, 100); // Small delay to batch rapid updates
             }
           }
         }
       } else {
-        // Initialize room if it doesn't exist
+        // Initialize room if it doesn't exist with better default state
         setDoc(roomRef, {
           videoUrl: DEFAULT_VIDEOS[0].url,
           status: 'paused',
@@ -140,7 +165,7 @@ export default function App() {
         });
       }
     });
-  }, [user]);
+  }, [user, isHost]);
 
   // Chat Sync
   useEffect(() => {
@@ -164,16 +189,93 @@ export default function App() {
     });
   }, [user]);
 
-  // Host periodic time sync
+  // User Presence Tracking
+  useEffect(() => {
+    if (!user) return;
+
+    const presenceDocRef = doc(db, 'rooms', ROOM_ID, 'presence', user.uid);
+
+    // Set up presence
+    presenceRef.current = {
+      uid: user.uid,
+      displayName: user.displayName || 'Anonymous',
+      lastSeen: Date.now(),
+      isOnline: true
+    };
+
+    // Update presence on activity
+    const updatePresence = () => {
+      setDoc(presenceDocRef, {
+        ...presenceRef.current,
+        lastSeen: Date.now()
+      }, { merge: true });
+    };
+
+    // Initial presence update
+    updatePresence();
+
+    // Update presence on activity (mouse move, key press, etc.)
+    const activityEvents = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
+    const handleActivity = () => updatePresence();
+
+    activityEvents.forEach(event => {
+      document.addEventListener(event, handleActivity, { passive: true });
+    });
+
+    // Regular heartbeat every 30 seconds
+    const heartbeatInterval = setInterval(updatePresence, 30000);
+
+    // Listen to all presence documents
+    const presenceQuery = query(collection(db, 'rooms', ROOM_ID, 'presence'));
+    const unsubscribePresence = onSnapshot(presenceQuery, (snapshot) => {
+      const now = Date.now();
+      const users = snapshot.docs.map(doc => ({
+        uid: doc.id,
+        ...doc.data()
+      } as UserPresence)).filter(user =>
+        now - user.lastSeen < 60000 // Consider online if seen within last minute
+      );
+      setOnlineUsers(users);
+    });
+
+    // Cleanup presence on unmount
+    const cleanup = () => {
+      setDoc(presenceDocRef, {
+        ...presenceRef.current,
+        isOnline: false,
+        lastSeen: Date.now()
+      }, { merge: true });
+    };
+
+    window.addEventListener('beforeunload', cleanup);
+
+    return () => {
+      cleanup();
+      clearInterval(heartbeatInterval);
+      activityEvents.forEach(event => {
+        document.removeEventListener(event, handleActivity);
+      });
+      window.removeEventListener('beforeunload', cleanup);
+      unsubscribePresence();
+    };
+  }, [user]);
+
+  // Host periodic time sync with improved frequency
   useEffect(() => {
     if (!isHost || !user || roomState?.status !== 'playing') return;
+
     const interval = setInterval(() => {
-      if (videoRef.current) {
-        updateRoomState({ currentTime: videoRef.current.currentTime });
+      if (videoRef.current && !syncIgnoreRef.current) {
+        const currentTime = videoRef.current.currentTime;
+        // Only update if there's been significant change (>0.5 seconds)
+        if (!roomState || Math.abs(currentTime - roomState.currentTime) > 0.5) {
+          updateRoomState({ currentTime });
+        }
       }
-    }, 5000); // Sync every 5 seconds
+    }, 2000); // More frequent syncs for better accuracy
+
     return () => clearInterval(interval);
-  }, [isHost, user, roomState?.status]);
+  }, [isHost, user, roomState?.status, roomState?.currentTime]);
 
   const handleLogin = () => signInWithPopup(auth, googleProvider);
   const handleLogout = () => auth.signOut();
@@ -185,21 +287,37 @@ export default function App() {
   };
 
   const handleVideoAction = () => {
-    if (!videoRef.current) return;
+    if (!videoRef.current || !isHost) return;
+
+    syncIgnoreRef.current = true;
     const newStatus = videoRef.current.paused ? 'playing' : 'paused';
-    updateRoomState({ 
-      status: newStatus, 
+
+    updateRoomState({
+      status: newStatus,
       currentTime: videoRef.current.currentTime,
       hostId: user?.uid || ''
     });
+
+    // Reset sync ignore after a short delay
+    setTimeout(() => {
+      syncIgnoreRef.current = false;
+    }, 500);
   };
 
   const handleSeek = () => {
-    if (!videoRef.current) return;
-    updateRoomState({ 
+    if (!videoRef.current || !isHost) return;
+
+    syncIgnoreRef.current = true;
+
+    updateRoomState({
       currentTime: videoRef.current.currentTime,
       hostId: user?.uid || ''
     });
+
+    // Reset sync ignore after a short delay
+    setTimeout(() => {
+      syncIgnoreRef.current = false;
+    }, 500);
   };
 
   const sendMessage = async (text: string) => {
